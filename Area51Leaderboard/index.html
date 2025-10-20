@@ -7,7 +7,6 @@
   <meta name="theme-color" content="#4e2a6c">
   <link rel="stylesheet" href="styles.css">
 </head>  
-
 <body>
   <header class="topbar">
     <img class="logo" src="pic/logo.png" alt="Area51 logo">
@@ -80,16 +79,7 @@
 
     <div class="modal__field">
       <label for="add-score">Time</label>
-      <input
-        id="add-score"
-        type="number"
-        step="0.01"
-        min="0"
-        inputmode="decimal"
-        autocomplete="off"
-        enterkeyhint="done"
-        placeholder="e.g., 4.72"
-      />
+      <input id="add-score" type="number" step="0.01" min="0" placeholder="e.g., 42.35" />
     </div>
 
     <div class="modal__actions">
@@ -97,7 +87,6 @@
       <button id="add-confirm" class="btn btn--primary">Confirm</button>
     </div>
   </div>
-  
 </div>
 
 <!-- Delete Row Modal -->
@@ -114,6 +103,7 @@
   </div>
 </div>
 
+
 <script src="main.js"></script>
 <script>
   if ("serviceWorker" in navigator) {
@@ -122,9 +112,6 @@
     });
   }
 </script>
-<div id="copyright" class="copyright">
-  &copy; <span id="copyright-year"></span> Mian
-</div>
 
 </body>
 </html>

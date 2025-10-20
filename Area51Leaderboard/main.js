@@ -1,5 +1,3 @@
-document.getElementById("copyright-year").textContent = new Date().getFullYear();
-
 // ===== LocalStorage helpers (no defaults) =====
 const STORAGE_KEYS = {
   hist: "area51_hist_leaderboard",
@@ -493,27 +491,6 @@ function ensureAllHaveIds() {
   }
 }
 
-// Force the Time field to accept only digits and a single dot on all platforms
-(function lockScoreField() {
-  const el = document.getElementById("add-score");
-  if (!el) return;
-
-  // Block characters often allowed by <input type="number"> on desktop browsers
-  el.addEventListener("keydown", (e) => {
-    const bad = ["e", "E", "+", "-"];
-    if (bad.includes(e.key)) e.preventDefault();
-  });
-
-  // Sanitize on input/paste: keep only digits and ONE dot
-  el.addEventListener("input", () => {
-    let v = el.value.replace(/[^\d.]/g, "");
-    const firstDot = v.indexOf(".");
-    if (firstDot !== -1) {
-      v = v.slice(0, firstDot + 1) + v.slice(firstDot + 1).replace(/\./g, "");
-    }
-    el.value = v;
-  });
-})();
 
 
 // ===== Wire buttons (ids from your HTML) =====
@@ -582,6 +559,25 @@ function handleRowDelete(e, which, tableSelector) {
     tableSelector
   });
   return;
+
+  
+  // remove from the correct array; prefer match by (name + time) to avoid removing other duplicates
+  const arr = which === "hist" ? histData : todayData;
+  const idx = arr.findIndex(r => (r.name || "").trim() === name && Math.abs(Number(r.score||0) - timeNum) < 1e-9);
+  const idxFallback = arr.findIndex(r => (r.name || "").trim() === name); // fallback if rounding differs
+  const rmIndex = idx >= 0 ? idx : idxFallback;
+  if (rmIndex >= 0) arr.splice(rmIndex, 1);
+
+  // persist + re-render (ascending = least time first)
+  if (which === "hist") {
+    save(STORAGE_KEYS.hist, arr);
+    renderLeaderboard(histData, "#rank-table-hist");
+    maybeReattachDeleteUI("#rank-table-hist");
+  } else {
+    save(STORAGE_KEYS.today, arr);
+    renderLeaderboard(todayData, "#rank-table-today");
+    maybeReattachDeleteUI("#rank-table-today");
+  }
 }
 
 

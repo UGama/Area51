@@ -1,4 +1,4 @@
-const CACHE_NAME = "leaderboard-v2"; // bump this to force an update
+const CACHE_NAME = "leaderboard-v1"; // bump this to force an update
 // service-worker.js
 const ASSETS = [
   "./",
