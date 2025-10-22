@@ -77,10 +77,14 @@
       <input id="add-name" type="text" placeholder="e.g., Aria" />
     </div>
 
+    <!-- Time -->
     <div class="modal__field">
       <label for="add-score">Time</label>
-      <input id="add-score" type="number" step="0.01" min="0" placeholder="e.g., 42.35" />
+      <!-- readonly prevents the OS keyboard; inputmode hints desktop/ATs -->
+      <input id="add-score" type="text" inputmode="decimal" autocomplete="off"
+      placeholder="e.g., 5.35" readonly />
     </div>
+
 
     <div class="modal__actions">
       <button id="add-cancel" class="btn">Cancel</button>
@@ -104,14 +108,79 @@
 </div>
 
 
-<script src="main.js"></script>
+<script src="main.js" defer></script>
 <script>
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-      navigator.serviceWorker.register("./service-worker.js").catch(console.error);
+if ('serviceWorker' in navigator) {
+  const isLocal = ['localhost','127.0.0.1'].includes(location.hostname);
+  if (!isLocal) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./service-worker.js', { scope: './' });
     });
+  } else {
+    navigator.serviceWorker.getRegistrations()
+      .then(rs => Promise.all(rs.map(r => r.unregister())))
+      .then(() => caches.keys())
+      .then(keys => Promise.all(keys.map(k => caches.delete(k))))
+      .then(() => {
+        if (!sessionStorage.getItem('reloadedAfterSWKill')) {
+          sessionStorage.setItem('reloadedAfterSWKill','1');
+          location.reload();
+        }
+      });
   }
+}
 </script>
 
+
+<!-- Custom numeric keypad -->
+<div id="numpad" class="numpad hidden" aria-hidden="true">
+  <div class="numpad__panel" role="dialog" aria-modal="true" aria-label="Numeric keypad">
+    <div class="numpad__display">
+      <input id="numpad-display" type="text" readonly />
+    </div>
+    <div class="numpad__grid">
+      <button data-k="7">7</button>
+      <button data-k="8">8</button>
+      <button data-k="9">9</button>
+
+      <button data-k="4">4</button>
+      <button data-k="5">5</button>
+      <button data-k="6">6</button>
+
+      <button data-k="1">1</button>
+      <button data-k="2">2</button>
+      <button data-k="3">3</button>
+
+      <button data-k=".">.</button>
+      <button data-k="0">0</button>
+      <button data-k="del" class="numpad__del">⌫</button>
+    </div>
+    <div class="numpad__actions">
+      <button id="numpad-cancel" class="btn">Cancel</button>
+      <button id="numpad-ok" class="btn btn--primary">OK</button>
+    </div>
+  </div>
+</div>
+<section class="rules">
+  <h3 class="rules__title">Rules</h3>
+  <ol class="rules__list">
+    <li>Every player must press the start &amp; finish button for themselves.</li>
+    <li>Every player must go through every main block (except two small blocks) without falling.</li>
+    <li>Player can get a free slushee if he/she breaks into the top 5 in the historical leaderboard.</li>
+  </ol>
+</section>
+
+  <div id="copyright" class="copyright">
+    &copy; <span id="copyright-year"></span> Mian
+  </div>
 </body>
+<section class="rules">
+  <h3 class="rules__title">Rules</h3>
+  <ol class="rules__list">
+    <li>Every player must press the start &amp; finish button for themselves.</li>
+    <li>Every player must go through every main block (except two small blocks) without falling.</li>
+    <li>Player can get a free slushee if he/she breaks into the top 5 in the historical leaderboard.</li>
+  </ol>
+</section>
+
 </html>

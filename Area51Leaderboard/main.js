@@ -1,3 +1,5 @@
+document.getElementById("copyright-year").textContent = new Date().getFullYear();
+
 // ===== LocalStorage helpers (no defaults) =====
 const STORAGE_KEYS = {
   hist: "area51_hist_leaderboard",
@@ -55,6 +57,12 @@ function renderLeaderboard(rows, tableSelector) {
 
   // if you're in edit mode, reattach delete UI
   maybeReattachDeleteUI(tableSelector);
+
+  applyMedals();
+
+  showEmptyStateIfNeeded(document.getElementById("rank-table-today"));
+  showEmptyStateIfNeeded(document.getElementById("rank-table-hist"));
+
 }
 
 
@@ -330,6 +338,37 @@ function maybeReattachDeleteUI(tableSelector) {
   }
 }
 
+function applyTop3MedalsToTable(table) {
+  if (!table || !table.tBodies || !table.tBodies[0]) return;
+  const rows = Array.from(table.tBodies[0].rows);
+
+  // Clear any previous medals
+  rows.forEach(tr => {
+    const last = tr.lastElementChild;
+    if (last) {
+      last.classList.remove('has-medal');
+      last.removeAttribute('data-medal');
+    }
+  });
+
+  // Add medals to top 3 rows (0,1,2)
+  const medals = ['gold', 'silver', 'bronze'];
+  rows.slice(0, 3).forEach((tr, i) => {
+    const last = tr.lastElementChild;  // assume last column is Time
+    if (!last) return;
+    last.classList.add('has-medal');
+    last.setAttribute('data-medal', medals[i]);
+  });
+}
+
+// Apply to whichever tables you have
+function applyMedals() {
+  const tables = document.querySelectorAll('#rank-table, #rank-table-today, #rank-table-hist');
+  tables.forEach(applyTop3MedalsToTable);
+}
+
+
+
 // ==== Generic Confirm Modal (reuses #delete-modal HTML) ====
 // _delContext now carries an action: "delete" | "reset-hist" | "reset-today"
 let _delContext = null; // { action, which, name?, timeNum?, timeStr?, opener, tableSelector? }
@@ -491,6 +530,105 @@ function ensureAllHaveIds() {
   }
 }
 
+let _numpadTarget = null;
+
+function openNumPadFor(inputSelector) {
+  const input = document.querySelector(inputSelector);
+  if (!input) return;
+  _numpadTarget = input;
+
+  const pad = document.getElementById("numpad");
+  const disp = document.getElementById("numpad-display");
+  disp.value = (input.value || "").toString();
+
+  pad.classList.remove("hidden");
+  pad.removeAttribute("aria-hidden");
+  document.body.style.overflow = "hidden";
+}
+
+function closeNumPad() {
+  const pad = document.getElementById("numpad");
+  pad.classList.add("hidden");
+  pad.setAttribute("aria-hidden", "true");
+  document.body.style.overflow = "";
+  _numpadTarget = null;
+}
+
+function applyNumPadValue() {
+  const disp = document.getElementById("numpad-display");
+  if (_numpadTarget) {
+    _numpadTarget.value = disp.value;
+    // optional: revalidate/formats to 2 decimals later in confirmAddFromModal
+  }
+  closeNumPad();
+}
+
+function showEmptyStateIfNeeded(table, message = "There are no records yet.") {
+  if (!table || !table.tBodies || !table.tBodies[0]) return;
+  const tbody = table.tBodies[0];
+
+  // Remove any previous empty-state row
+  tbody.querySelectorAll("tr.table-empty").forEach(tr => tr.remove());
+
+  // If there are **no data rows**, insert an empty-state row
+  if (tbody.rows.length === 0) {
+    const tr = document.createElement("tr");
+    tr.className = "table-empty";
+    const td = document.createElement("td");
+
+    // Use header length if available; fallback to current column count or 3
+    const colCount =
+      (table.tHead && table.tHead.rows[0]?.cells.length) ||
+      (table.rows[0]?.cells.length) ||
+      3;
+
+    td.colSpan = colCount;
+    td.textContent = message;
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+}
+
+// Button clicks
+document.getElementById("numpad")?.addEventListener("click", (e) => {
+  if (!(e.target instanceof Element)) return;
+
+  // backdrop close
+  if (e.target.id === "numpad") { closeNumPad(); return; }
+
+  const k = e.target.getAttribute("data-k");
+  if (!k && e.target.id !== "numpad-ok" && e.target.id !== "numpad-cancel") return;
+
+  const disp = document.getElementById("numpad-display");
+
+  if (k === "del") {
+    disp.value = disp.value.slice(0, -1);
+  } else if (k === ".") {
+    if (!disp.value.includes(".")) {
+      disp.value = disp.value ? disp.value + "." : "0.";
+    }
+  } else if (k) {
+    // digits 0-9
+    disp.value += k;
+  } else if (e.target.id === "numpad-ok") {
+    applyNumPadValue();
+  } else if (e.target.id === "numpad-cancel") {
+    closeNumPad();
+  }
+});
+
+// Keyboard support for desktop (optional)
+document.getElementById("numpad")?.addEventListener("keydown", (e) => {
+  const disp = document.getElementById("numpad-display");
+  if (e.key >= "0" && e.key <= "9") { disp.value += e.key; e.preventDefault(); }
+  if (e.key === "." && !disp.value.includes(".")) { disp.value += "."; e.preventDefault(); }
+  if (e.key === "Backspace") { disp.value = disp.value.slice(0, -1); e.preventDefault(); }
+  if (e.key === "Enter") { applyNumPadValue(); e.preventDefault(); }
+  if (e.key === "Escape") { closeNumPad(); e.preventDefault(); }
+});
+
+// Prevent typing directly in #add-score (we use the keypad)
+document.getElementById("add-score")?.addEventListener("keydown", (e) => e.preventDefault());
 
 
 // ===== Wire buttons (ids from your HTML) =====
@@ -627,3 +765,13 @@ document.getElementById("delete-modal")?.addEventListener("click", (e) => {
   if (e.target.id === "delete-modal") closeConfirmModal();
 });
 
+// Show custom keypad when Time input is clicked/focused
+document.getElementById("add-score")?.addEventListener("click", () => openNumPadFor("#add-score"));
+document.getElementById("add-score")?.addEventListener("focus", () => openNumPadFor("#add-score"));
+
+
+
+// Author: Gama
+// Surfers Paradise, QLD
+// 18/10/25
+// 位卑未敢忘忧国，哪怕无人知我

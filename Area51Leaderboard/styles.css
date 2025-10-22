@@ -1,4 +1,20 @@
 /* styles.css */
+.copyright{
+  position: fixed;
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #5a4c78;
+  background: rgba(255,255,255,.92);
+  border: 1px solid #e9e3f3;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.08);
+  z-index: 3000;
+}
+@media (max-width: 520px){
+  .copyright{ font-size: 11px; padding: 5px 8px; }
+}
 
 :root {
   --brand: #4e2a6c;
@@ -64,6 +80,7 @@ html, body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto,
 table {
   border-collapse: collapse;
   width: 100%;
+  font-size: 18px;
 }
 
 /* Action bars under each leaderboard */
@@ -229,4 +246,126 @@ th.del-col, td.del-col { text-align: center; width: 40px; }
 .card table {
   margin-top: 20px;
   margin-bottom: 20px; /* optional */
+}
+
+/* ===== Custom numeric keypad ===== */
+.numpad.hidden { display: none; }
+.numpad {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.35);
+  display: grid; place-items: center;
+  z-index: 3000;
+}
+.numpad__panel {
+  width: min(92vw, 360px);
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.2);
+  padding: 16px;
+}
+.numpad__display {
+  margin-bottom: 10px;
+}
+#numpad-display {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #ddd;
+  font-size: 20px;
+  text-align: right;
+}
+.numpad__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.numpad__grid button {
+  padding: 14px 0;
+  border-radius: 10px;
+  border: 1px solid #d6cbe3;
+  background: #f7f3fb;
+  font-size: 20px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.numpad__grid button:hover { background: #efe7f8; }
+.numpad__del { color: #b30000; border-color: #ff8b8b; background: #ffe5e5; }
+.numpad__del:hover { background: #ffd1d1; }
+.numpad__actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+  margin-top: 10px;
+}
+/* Keep everything in the keypad box */
+.numpad__panel { overflow: hidden; }
+
+/* Hard reset ONLY the keypad display input */
+.numpad .numpad__display input {
+  all: unset;                 /* wipe inherited app styles */
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  height: 44px;               /* or 48px, your call */
+  padding: 10px 12px;
+  border: 1px solid #d0d0d0;
+  border-radius: 10px;
+  background: #fff;
+  color: #111;
+  font: 600 20px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  text-align: right;
+  /* make sure no weird offsets sneak in */
+  margin: 0;
+  position: static;
+  transform: none;
+  top: auto; left: auto; right: auto; bottom: auto;
+}
+/* Make room for a medal inside the right edge of the last column */
+td.has-medal {
+  position: relative;
+  padding-right: 32px;        /* room for the medal */
+}
+
+/* Medal bubble pinned to the inner-right of the cell */
+td.has-medal::after {
+  content: "";                 /* set below via data-medal attribute */
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 20px;             /* emoji size; tweak if needed */
+  line-height: 1;
+}
+
+/* Choose which medal to show (emoji for simplicity, looks great everywhere) */
+td.has-medal[data-medal="gold"]::after   { content: "🥇"; }
+td.has-medal[data-medal="silver"]::after { content: "🥈"; }
+td.has-medal[data-medal="bronze"]::after { content: "🥉"; }
+
+/* Empty-state row inside tables */
+.table-empty {
+  color: #000;
+  text-align: center;
+  font-style: italic;
+}
+
+/* Rules under the tables: small, black text */
+.rules {
+  margin-top: 16px;
+  color: #000;
+  font-size: 16px;          /* make it small; change to 13px if you want a bit larger */
+  line-height: 1.35;
+  margin-right: 32px;
+  margin-left: 32px;   /* ← nudge to the right */
+  text-align: left;
+}
+
+.rules__title {
+  margin: 0 0 6px 0;
+  font-size: 20px;          /* keep the heading small too */
+  font-weight: 700;         /* small but clear */
+  color: #000;
+}
+
+.rules__list {
+  margin: 0;
+  padding-left: 18px;       /* indentation for numbers */
 }
