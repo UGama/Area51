@@ -1,62 +1,100 @@
-// service-worker.js
-const CACHE_NAME = "leaderboard-v1.2"; // ← bump on each deploy
+/* service-worker.js — network-first for HTML/CSS/JS; SW updates immediately */
 
-const ASSETS = [
-  "./",
-  "./index.html",
-  "./styles.css",
-  "./main.js",
-  "./manifest.json",
-  "./pic/logo.png",
-  "./pic/icon-192.png",
-  "./pic/icon-512.png",
-];
+const CACHE_PREFIX = "leaderboard";
+const RUNTIME_CACHE = `${CACHE_PREFIX}-runtime-v1`;
 
-// Install: pre-cache core assets
-self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE_NAME).then((c) => c.addAll(ASSETS)));
+self.addEventListener("install", (event) => {
+  // Take control without waiting for a manual reload
   self.skipWaiting();
 });
 
-// Activate: clear old caches
-self.addEventListener("activate", (e) => {
-  e.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.map((k) => (k === CACHE_NAME ? null : caches.delete(k))))
-    )
-  );
-  self.clients.claim();
+self.addEventListener("activate", (event) => {
+  event.waitUntil((async () => {
+    // Claim control of all clients (tabs) immediately
+    await self.clients.claim();
+    // Delete old caches with our prefix
+    const keys = await caches.keys();
+    await Promise.all(
+      keys
+        .filter((k) => k.startsWith(CACHE_PREFIX) && k !== RUNTIME_CACHE)
+        .map((k) => caches.delete(k))
+    );
+  })());
 });
 
-// Fetch:
-// - HTML (navigations): network-first (so new deploy shows immediately)
-// - Other same-origin assets: cache-first but RESPECT query strings (so ?v= busts cache)
-self.addEventListener("fetch", (e) => {
-  const req = e.request;
+self.addEventListener("fetch", (event) => {
+  const req = event.request;
+  if (req.method !== "GET") return;
 
-  // For SPA/page navigations
-  if (req.mode === "navigate" || (req.destination === "document")) {
-    e.respondWith(
-      fetch(req).then((net) => {
-        const copy = net.clone();
-        caches.open(CACHE_NAME).then((c) => c.put(req, copy));
-        return net;
-      }).catch(() => caches.match(req))
-    );
+  const url = new URL(req.url);
+
+  // Same-origin only. Let cross-origin (e.g., CDNs, APIs) pass through untouched.
+  if (url.origin !== self.location.origin) return;
+
+  // 1) HTML (navigations, index.html): NETWORK FIRST (bypass HTTP cache)
+  const acceptsHTML = req.headers.get("accept")?.includes("text/html");
+  if (acceptsHTML) {
+    event.respondWith(networkFirst(req, { cacheBypass: true, fallbackTo: "/index.html" }));
     return;
   }
 
-  // For same-origin static assets
-  const url = new URL(req.url);
-  if (url.origin === self.location.origin) {
-    e.respondWith(
-      caches.match(req /* do NOT ignoreSearch */).then((cached) => {
-        const fetchPromise = fetch(req).then((net) => {
-          caches.open(CACHE_NAME).then((c) => c.put(req, net.clone()));
-          return net;
-        }).catch(() => cached);
-        return cached || fetchPromise;
-      })
-    );
+  // 2) JS & CSS: NETWORK FIRST (so new code loads right away)
+  if (req.destination === "script" || req.destination === "style") {
+    event.respondWith(networkFirst(req, { cacheBypass: false }));
+    return;
   }
+
+  // 3) Images: STALE-WHILE-REVALIDATE (fast, then refresh in background)
+  if (req.destination === "image") {
+    event.respondWith(staleWhileRevalidate(req));
+    return;
+  }
+
+  // 4) Everything else: try cache, fall back to network
+  event.respondWith(cacheFirst(req));
+});
+
+async function networkFirst(request, { cacheBypass = false, fallbackTo = null } = {}) {
+  const cache = await caches.open(RUNTIME_CACHE);
+  try {
+    const freshReq = cacheBypass ? new Request(request.url, { cache: "reload" }) : request;
+    const fresh = await fetch(freshReq);
+    if (fresh && fresh.ok) cache.put(request, fresh.clone());
+    return fresh;
+  } catch (err) {
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    if (fallbackTo) {
+      const fallback = await cache.match(fallbackTo);
+      if (fallback) return fallback;
+    }
+    // as a last resort rethrow to show a real error offline
+    throw err;
+  }
+}
+
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open(RUNTIME_CACHE);
+  const cached = await cache.match(request);
+  const networkPromise = fetch(request).then((resp) => {
+    if (resp && resp.ok) cache.put(request, resp.clone());
+    return resp;
+  }).catch(() => null);
+
+  // Return cached immediately if present, otherwise wait for network
+  return cached || networkPromise || fetch(request);
+}
+
+async function cacheFirst(request) {
+  const cache = await caches.open(RUNTIME_CACHE);
+  const cached = await cache.match(request);
+  return cached || fetch(request).then((resp) => {
+    if (resp && resp.ok) cache.put(request, resp.clone());
+    return resp;
+  });
+}
+
+// Optional: allow your page to tell the SW to activate immediately
+self.addEventListener("message", (event) => {
+  if (event.data === "SKIP_WAITING") self.skipWaiting();
 });

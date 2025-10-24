@@ -161,8 +161,6 @@ function toggleEditable(tableSelector, btnEl, which) {
   }
 }
 
-
-
 // ===== Actions (all persist) =====
 function resetHistorical() {
   histData.splice(0, histData.length); // clear to empty
@@ -225,14 +223,13 @@ function openAddModal(target, openerEl) {
   _addOpener = openerEl || document.activeElement;
 
   const modal = document.getElementById("add-modal");
+  modal.classList.add("modal--under-topbar");   // <<< pin panel under topbar
   modal.classList.remove("hidden");
   modal.removeAttribute("aria-hidden");
   modal.removeAttribute("inert");
 
-  // optional: prevent page scroll while open
   document.body.style.overflow = "hidden";
 
-  // reset fields + focus first field
   document.getElementById("add-name").value = "";
   document.getElementById("add-score").value = "";
   setTimeout(() => document.getElementById("add-name").focus(), 0);
@@ -241,24 +238,26 @@ function openAddModal(target, openerEl) {
 function closeAddModal() {
   const modal = document.getElementById("add-modal");
 
-  // 1) MOVE FOCUS OUT of the modal (back to the opener)
   if (_addOpener && typeof _addOpener.focus === "function") {
     _addOpener.focus();
   } else {
-    // fallback to body if opener is gone
     document.body.focus?.();
   }
 
-  // 2) Now it’s safe to hide the modal
-  modal.setAttribute("aria-hidden", "true");
-  modal.setAttribute("inert", "");          // blocks focus & interaction
-  modal.classList.add("hidden");
+  // ALSO close the keypad if it is open
+  closeNumPad();  // ← added
 
-  // 3) cleanup
+  modal.setAttribute("aria-hidden", "true");
+  modal.setAttribute("inert", "");
+  modal.classList.add("hidden");
+  modal.classList.remove("modal--under-topbar");
+
   document.body.style.overflow = "";
   _addTarget = null;
   _addOpener = null;
 }
+
+
 
 function confirmAddFromModal() {
   const name = (document.getElementById("add-name").value || "").trim();
@@ -366,8 +365,6 @@ function applyMedals() {
   const tables = document.querySelectorAll('#rank-table, #rank-table-today, #rank-table-hist');
   tables.forEach(applyTop3MedalsToTable);
 }
-
-
 
 // ==== Generic Confirm Modal (reuses #delete-modal HTML) ====
 // _delContext now carries an action: "delete" | "reset-hist" | "reset-today"
@@ -531,28 +528,76 @@ function ensureAllHaveIds() {
 }
 
 let _numpadTarget = null;
+let _repositionPadHandler = null;
 
+/** Position keypad under the input, but never overlapping the modal panel */
+function positionNumpadUnder(targetInput) {
+  const pad   = document.getElementById("numpad");
+  const panel = pad?.querySelector(".numpad__panel");
+  const modalPanel = document.querySelector("#add-modal .modal__panel");
+  if (!pad || !panel || !targetInput) return;
+
+  pad.classList.add("numpad--anchored");
+
+  // where the input sits
+  const inputRect = targetInput.getBoundingClientRect();
+  // where the modal panel ends (so we don't overlap it)
+  const modalRect = modalPanel?.getBoundingClientRect();
+
+  const gap = 16;     // space under input
+  const guard = 8;    // extra space under modal panel
+
+  // ideal position just under the input
+  let top = inputRect.bottom + gap;
+
+  // SAFETY: never overlap the modal panel — push below it if needed
+  if (modalRect) top = Math.max(top, modalRect.bottom + guard);
+
+  // Horizontal centering is handled by CSS (left:50% + translateX)
+  panel.style.top = `${Math.round(top)}px`;
+}
+
+/** Open keypad and anchor it */
 function openNumPadFor(inputSelector) {
   const input = document.querySelector(inputSelector);
   if (!input) return;
   _numpadTarget = input;
 
-  const pad = document.getElementById("numpad");
+  const pad  = document.getElementById("numpad");
   const disp = document.getElementById("numpad-display");
   disp.value = (input.value || "").toString();
 
   pad.classList.remove("hidden");
   pad.removeAttribute("aria-hidden");
   document.body.style.overflow = "hidden";
+
+  // wait a frame so layout is correct, then position
+  requestAnimationFrame(() => positionNumpadUnder(input));
+
+  // keep it attached on viewport changes
+  _repositionPadHandler = () => positionNumpadUnder(input);
+  window.addEventListener("resize", _repositionPadHandler, { passive: true });
+  window.addEventListener("scroll", _repositionPadHandler, { passive: true });
+  window.addEventListener("orientationchange", _repositionPadHandler, { passive: true });
 }
 
+/** Close keypad and clean up */
 function closeNumPad() {
   const pad = document.getElementById("numpad");
   pad.classList.add("hidden");
   pad.setAttribute("aria-hidden", "true");
+  pad.classList.remove("numpad--anchored");
   document.body.style.overflow = "";
   _numpadTarget = null;
+
+  if (_repositionPadHandler) {
+    window.removeEventListener("resize", _repositionPadHandler);
+    window.removeEventListener("scroll", _repositionPadHandler);
+    window.removeEventListener("orientationchange", _repositionPadHandler);
+    _repositionPadHandler = null;
+  }
 }
+
 
 function applyNumPadValue() {
   const disp = document.getElementById("numpad-display");
@@ -588,6 +633,7 @@ function showEmptyStateIfNeeded(table, message = "There are no records yet.") {
     tbody.appendChild(tr);
   }
 }
+
 
 // Button clicks
 document.getElementById("numpad")?.addEventListener("click", (e) => {
@@ -769,6 +815,43 @@ document.getElementById("delete-modal")?.addEventListener("click", (e) => {
 document.getElementById("add-score")?.addEventListener("click", () => openNumPadFor("#add-score"));
 document.getElementById("add-score")?.addEventListener("focus", () => openNumPadFor("#add-score"));
 
+// Close keypad when clicking anywhere that's NOT inside the keypad panel or the Add modal panel
+document.addEventListener("click", (e) => {
+  const pad = document.getElementById("numpad");
+  if (!pad || pad.classList.contains("hidden")) return;
+
+  const kpPanel = document.querySelector("#numpad .numpad__panel");
+  const modalPanel = document.querySelector("#add-modal .modal__panel");
+  const t = e.target;
+
+  const clickedInsideKeypad = kpPanel?.contains(t);
+  const clickedInsideAddModal = modalPanel?.contains(t);
+
+  if (!clickedInsideKeypad && !clickedInsideAddModal) {
+    closeNumPad();
+  }
+}, true); // capture phase helps with nested elements
+
+// Close keypad on Escape even if focus isn't inside it
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    const pad = document.getElementById("numpad");
+    if (pad && !pad.classList.contains("hidden")) closeNumPad();
+  }
+});
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./service-worker.js");
+
+  // Auto-reload once when a new SW activates
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    // Prevent reload loops
+    if (!window.__reloadedAfterSW) {
+      window.__reloadedAfterSW = true;
+      window.location.reload();
+    }
+  });
+}
 
 
 // Author: Gama

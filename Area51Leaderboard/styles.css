@@ -369,3 +369,132 @@ td.has-medal[data-medal="bronze"]::after { content: "🥉"; }
   margin: 0;
   padding-left: 18px;       /* indentation for numbers */
 }
+
+/* --- place the Add modal near the top (not fully centered) --- */
+.modal--top {
+  align-items: flex-start;           /* push panel toward top */
+  padding-top: calc(16px + env(safe-area-inset-top));
+}
+.modal--top .modal__panel {
+  margin-top: 8px;                   /* tiny extra spacing under topbar */
+}
+
+/* a little breathing room around inputs in the modal */
+.modal__field input {
+  margin-top: 2px;
+}
+
+/* --- anchored numpad: appears under the input instead of page center --- */
+.numpad--anchored {
+  /* no dim backdrop, so UI feels like a popover under the input */
+  background: transparent;
+  display: block;
+  pointer-events: none;              /* let clicks pass through backdrop area */
+}
+.numpad--anchored .numpad__panel {
+  position: fixed;                   /* we’ll set top/left via JS */
+  pointer-events: auto;              /* panel itself is interactive */
+  width: min(92vw, 360px);
+}
+
+/* small horizontal nudge for overall page so it’s not “stuck” to edges */
+.page {
+  padding-left: calc(24px + env(safe-area-inset-left));
+  padding-right: calc(24px + env(safe-area-inset-right));
+}
+/* Keep modal centered (your default), and ensure panels stack above page */
+.modal__panel {
+  z-index: 1100; /* modal content above backdrop */
+}
+
+/* Anchored keypad that we position under the input via JS */
+.numpad--anchored {
+  background: transparent;      /* remove dim backdrop for popover feel */
+  display: block;
+  pointer-events: none;         /* clicks pass through the backdrop area */
+}
+
+.numpad--anchored .numpad__panel {
+  position: fixed;              /* we control left/top in JS */
+  pointer-events: auto;         /* keypad itself is clickable */
+  width: min(92vw, 360px);      /* responsive max width */
+  z-index: 1200;                /* above the modal panel */
+  /* optional: soften */
+  border-radius: 16px;
+}
+
+/* small breathing room around the Time input inside the modal */
+#add-score {
+  margin-bottom: 6px;           /* helps visually separate input and keypad */
+}
+/* Keep the add modal centered; ensure it stacks above the page */
+.modal { display: grid; place-items: center; }
+.modal__panel { z-index: 1100; }
+
+/* Make the page sit comfortably under the sticky topbar */
+.page {
+  padding-left: calc(24px + env(safe-area-inset-left));
+  padding-right: calc(24px + env(safe-area-inset-right));
+  padding-top: 16px; /* content under topbar */
+}
+
+/* Use an "anchored popover" keypad we can place via JS */
+.numpad--anchored {
+  background: transparent;   /* remove dim backdrop */
+  display: block;
+  pointer-events: none;      /* clicks pass through backdrop area */
+}
+.numpad--anchored .numpad__panel {
+  position: fixed;           /* left/top set by JS */
+  pointer-events: auto;
+  width: min(92vw, 360px);
+  z-index: 1200;             /* above modal panel */
+  border-radius: 16px;
+}
+
+/* small visual gap under the Time input inside modal */
+#add-score { margin-bottom: 8px; }
+/* Put the Add modal panel just under the sticky topbar (horizontally centered) */
+.modal--under-topbar {
+  align-items: flex-start;  /* push panel toward the top */
+  padding-top: calc(var(--topbar-h) + 24px + env(safe-area-inset-top));
+}
+.modal--under-topbar .modal__panel {
+  margin-inline: auto;      /* keep the panel centered horizontally */
+}
+
+/* Make sure the keypad can sit above the panel and be positioned by JS */
+.numpad--anchored {
+  background: transparent;  /* no dark backdrop for the anchored keypad */
+  display: block;
+  pointer-events: none;
+}
+.numpad--anchored .numpad__panel {
+  position: fixed;          /* JS sets left/top under the input */
+  pointer-events: auto;
+  width: min(92vw, 360px);
+  z-index: 1200;            /* above .modal__panel (1100) so it’s visible */
+}
+
+/* small gap under the Time input so it never “touches” the keypad */
+#add-score { margin-bottom: 8px; }
+/* Keep the add panel under the topbar but centered horizontally */
+.modal--under-topbar {
+  align-items: flex-start;
+  padding-top: calc(var(--topbar-h) + 24px + env(safe-area-inset-top));
+}
+.modal--under-topbar .modal__panel {
+  margin-inline: auto; /* <-- horizontal center */
+}
+
+/* Make the keypad horizontally centered; JS only sets its TOP */
+.numpad--anchored .numpad__panel {
+  position: fixed;
+  width: min(92vw, 360px);
+  left: 50%;
+  transform: translateX(-50%);  /* <-- horizontal center */
+  z-index: 1200;
+}
+
+/* tiny space between input and keypad */
+#add-score { margin-bottom: 8px; }
