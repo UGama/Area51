@@ -350,6 +350,7 @@ td.has-medal[data-medal="bronze"]::after { content: "🥉"; }
 /* Rules under the tables: small, black text */
 .rules {
   margin-top: 16px;
+  margin-bottom: 50px;
   color: #000;
   font-size: 16px;          /* make it small; change to 13px if you want a bit larger */
   line-height: 1.35;

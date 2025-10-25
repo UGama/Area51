@@ -1,7 +1,7 @@
 /* service-worker.js — network-first for HTML/CSS/JS; SW updates immediately */
 
 const CACHE_PREFIX = "leaderboard";
-const RUNTIME_CACHE = `${CACHE_PREFIX}-runtime-v1`;
+const RUNTIME_CACHE = `${CACHE_PREFIX}-runtime-v2`;
 
 self.addEventListener("install", (event) => {
   // Take control without waiting for a manual reload

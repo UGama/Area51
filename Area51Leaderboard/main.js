@@ -63,21 +63,32 @@ function renderLeaderboard(rows, tableSelector) {
   showEmptyStateIfNeeded(document.getElementById("rank-table-today"));
   showEmptyStateIfNeeded(document.getElementById("rank-table-hist"));
 
+  refreshEmptyState();
 }
 
 
 // Convert current table → array (used when finishing Edit)
 function tableToArray(tableSelector) {
   const rows = [...document.querySelectorAll(`${tableSelector} tbody tr`)];
-  return rows.map((tr) => {
-    const idAttr = tr.getAttribute("data-id");
-    const id = Number.parseInt(idAttr, 10);
-    const tds = tr.querySelectorAll("td");
-    const name  = (tds[1]?.textContent || "").trim();
-    const score = parseFloat((tds[2]?.textContent || "").trim());
-    return { id: Number.isFinite(id) ? id : undefined, name, score: isNaN(score) ? 0 : score };
-  });
+
+  return rows
+    .filter(tr => !tr.classList.contains("table-empty"))    // ← ignore placeholder
+    .filter(tr => tr.cells.length >= 3)                     // ← need Rank, Name, Time
+    .map((tr) => {
+      const idAttr = tr.getAttribute("data-id");
+      const id = Number.parseInt(idAttr, 10);
+      const tds = tr.querySelectorAll("td");
+      const name  = (tds[1]?.textContent || "").trim();
+      const score = parseFloat((tds[2]?.textContent || "").trim());
+      return {
+        id: Number.isFinite(id) ? id : undefined,
+        name,
+        score: Number.isFinite(score) ? score : 0
+      };
+    })
+    .filter(r => r.name !== "");                            // ← drop blank lines
 }
+
 
 ensureAllHaveIds();
 
@@ -98,6 +109,7 @@ function toggleEditable(tableSelector, btnEl, which) {
     btnEl.textContent = "Edit";
     btnEl.classList.remove("is-editing");
     card.classList.remove("editing");
+    document.querySelector(tableSelector).dataset.wantDeleteCol = "0";
     disableDeleteUI(tableSelector);  
 
     // Grab latest table → array
@@ -118,9 +130,18 @@ function toggleEditable(tableSelector, btnEl, which) {
       }
     }
 
+    showEmptyStateIfNeeded(document.getElementById("rank-table-hist"));
+    showEmptyStateIfNeeded(document.getElementById("rank-table-today"));
+    refreshEmptyState();
+
     // Cleanup listeners/flags + tip
     tbody.removeEventListener("input", tbody._markDirty);
     tbody.removeEventListener("keydown", tbody._finishOnEnter);
+    if (tbody._timeHandler) {
+      tbody.removeEventListener("click", tbody._timeHandler, true);
+      tbody.removeEventListener("focusin", tbody._timeHandler, true);
+      delete tbody._timeHandler;
+    }
     delete tbody._markDirty;
     delete tbody._finishOnEnter;
     delete tbody._snapshot;
@@ -130,9 +151,32 @@ function toggleEditable(tableSelector, btnEl, which) {
   } else {
     // === Turning ON edit ===
     tbody.setAttribute("contenteditable", "true");
+    // Keep the empty-state placeholder non-editable even in edit mode
+    tbody.querySelectorAll("tr.table-empty, tr.table-empty > td").forEach(el => {
+    el.setAttribute("contenteditable", "false");
+    el.style.userSelect = "none";
+    });
+
+    [...tbody.rows].forEach(tr => tr.cells[0]?.setAttribute("contenteditable", "false"));
+
+    // 🆕 Open numpad when the 3rd cell (Time) is focused/clicked
+    const isTimeCell = (td) => td && td.cellIndex === 2 && !td.classList.contains("del-col");
+
+    tbody._timeHandler = (e) => {
+      const td = e.target.closest?.("td");
+      if (!td || !isTimeCell(td)) return;
+      // prevent typing chaos; rely on keypad
+      e.preventDefault();
+      openNumPadForCell(td);
+    };
+
+    tbody.addEventListener("click", tbody._timeHandler, true);
+    tbody.addEventListener("focusin", tbody._timeHandler, true);
+
     btnEl.textContent = "Done (Save)";
     btnEl.classList.add("is-editing");
     card.classList.add("editing");
+    document.querySelector(tableSelector).dataset.wantDeleteCol = "1";
     enableDeleteUI(tableSelector);
 
     // Add a small tip below the buttons (once)
@@ -189,13 +233,15 @@ function mergeTodayIntoHistorical() {
 
 
 function normalizeRows(rows) {
-  // keep id + clean name + round time
-  return rows.map(r => ({
-    id: Number.isInteger(r.id) ? r.id : undefined,
-    name: (r.name || "").trim(),
-    score: Math.round((Number(r.score) || 0) * 100) / 100,
-  }));
+  return rows
+    .map(r => ({
+      id: Number.isInteger(r.id) ? r.id : undefined,
+      name: (r.name || "").trim(),
+      score: Math.round((Number(r.score) || 0) * 100) / 100,
+    }))
+    .filter(r => r.name !== "");  // ← do not keep empty-name rows
 }
+
 
 function isSameData(a, b) {
   const A = normalizeRows(a);
@@ -208,7 +254,6 @@ function isSameData(a, b) {
   }
   return true;
 }
-
 
 function keepTopNByTimeAsc(arr, n = 10) {
   arr.sort((a, b) => Number(a.score || 0) - Number(b.score || 0)); // low → high
@@ -257,34 +302,66 @@ function closeAddModal() {
   _addOpener = null;
 }
 
-
-
 function confirmAddFromModal() {
   const name = (document.getElementById("add-name").value || "").trim();
-  const scoreRaw = document.getElementById("add-score").value;
-  const score = Math.round((parseFloat(scoreRaw) || 0) * 100) / 100;
 
-  if (!name) { alert("Please enter a name."); return; }
-  if (isNaN(score)) { alert("Please enter a valid score."); return; }
+  // Raw string from the read-only time input (filled via keypad)
+  const scoreStr = (document.getElementById("add-score").value || "").trim();
+
+  // --- validations ---
+  if (!name) {
+    alert("Please enter a name.");
+    return;
+  }
+  if (scoreStr === "") {
+    alert("Please enter a time.");
+    return;
+  }
+  // Must be a finite number > 0
+  const scoreNum = Number(scoreStr);
+  if (!Number.isFinite(scoreNum)) {
+    alert("Please enter a valid time (e.g., 5.35).");
+    return;
+  }
+  if (scoreNum <= 0) {
+    alert("Time must be greater than 0.");
+    return;
+  }
+
+  // Normalize to 2 decimals after validation
+  const score = Math.round(scoreNum * 100) / 100;
 
   if (_addTarget === "today") {
     todayData.push({ id: nextGlobalId(), name, score });
     keepTopNByTimeAsc(todayData, 10);
     save(STORAGE_KEYS.today, todayData);
     renderLeaderboard(todayData, "#rank-table-today");
-  } 
-  else if (_addTarget === "hist") {
+  } else if (_addTarget === "hist") {
     histData.push({ id: nextGlobalId(), name, score });
     keepTopNByTimeAsc(histData, 10);
     save(STORAGE_KEYS.hist, histData);
     renderLeaderboard(histData, "#rank-table-hist");
   }
+
   closeAddModal();
 }
+
+
+// Add a "Delete" column with × buttons (only in edit mode)
 // Add a "Delete" column with × buttons (only in edit mode)
 function enableDeleteUI(tableSelector) {
   const table = document.querySelector(tableSelector);
   if (!table) return;
+
+  const tbody = table.tBodies?.[0];
+  const hasRows = !!tbody && tbody.rows.length > 0;
+
+  // If empty, ensure the delete column is NOT shown at all
+  if (!hasRows) {
+    disableDeleteUI(tableSelector);
+    table.dataset.showDelete = "1"; // remember we're in edit mode, but no delete column
+    return;
+  }
 
   // mark so we know it's active
   table.dataset.showDelete = "1";
@@ -299,7 +376,7 @@ function enableDeleteUI(tableSelector) {
   }
 
   // 2) body: append a delete cell to each row if missing
-  [...table.tBodies[0].rows].forEach((tr) => {
+  [...tbody.rows].forEach((tr) => {
     if (!tr.querySelector("td.del-col")) {
       const td = document.createElement("td");
       td.className = "del-col";
@@ -308,6 +385,7 @@ function enableDeleteUI(tableSelector) {
     }
   });
 }
+
 
 // Remove the extra "Delete" column when exiting edit mode
 function disableDeleteUI(tableSelector) {
@@ -332,10 +410,20 @@ function disableDeleteUI(tableSelector) {
 // After we re-render during Edit mode, we need to re-attach the delete column
 function maybeReattachDeleteUI(tableSelector) {
   const table = document.querySelector(tableSelector);
-  if (table?.dataset.showDelete === "1") {
+  if (!table) return;
+  const tbody = table.tBodies?.[0];
+  const editing = tbody?.getAttribute("contenteditable") === "true";
+  const want = table.dataset.wantDeleteCol === "1";
+  const hasRows = countRows(tbody) > 0;
+
+  if (editing && want && hasRows) {
     enableDeleteUI(tableSelector);
+  } else {
+    // If empty (or not editing), make sure the column is gone
+    disableDeleteUI(tableSelector);
   }
 }
+
 
 function applyTop3MedalsToTable(table) {
   if (!table || !table.tBodies || !table.tBodies[0]) return;
@@ -472,10 +560,12 @@ function confirmFromModal() {
     if (which === "hist") {
       save(STORAGE_KEYS.hist, arr);
       renderLeaderboard(histData, "#rank-table-hist");
+      refreshEmptyState();
       maybeReattachDeleteUI("#rank-table-hist");
     } else {
       save(STORAGE_KEYS.today, arr);
       renderLeaderboard(todayData, "#rank-table-today");
+      refreshEmptyState();
       maybeReattachDeleteUI("#rank-table-today");
     }
   }
@@ -584,6 +674,7 @@ function openNumPadFor(inputSelector) {
 /** Close keypad and clean up */
 function closeNumPad() {
   const pad = document.getElementById("numpad");
+  const disp = document.getElementById("numpad-display");
   pad.classList.add("hidden");
   pad.setAttribute("aria-hidden", "true");
   pad.classList.remove("numpad--anchored");
@@ -596,17 +687,28 @@ function closeNumPad() {
     window.removeEventListener("orientationchange", _repositionPadHandler);
     _repositionPadHandler = null;
   }
+  delete pad.dataset.mode;
+  delete pad.dataset.prev;
+  disp.placeholder = "";
 }
 
 
 function applyNumPadValue() {
   const disp = document.getElementById("numpad-display");
   if (_numpadTarget) {
-    _numpadTarget.value = disp.value;
-    // optional: revalidate/formats to 2 decimals later in confirmAddFromModal
+    const raw = disp.value;
+    if (_numpadTarget.tagName === "INPUT") {
+      _numpadTarget.value = raw;
+    } else {
+      const num = Math.round((parseFloat(raw) || 0) * 100) / 100;
+      _numpadTarget.textContent = num.toFixed(2);
+      const tbody = _numpadTarget.closest("tbody");
+      if (tbody && typeof tbody._markDirty === "function") tbody._markDirty();
+    }
   }
   closeNumPad();
 }
+
 
 function showEmptyStateIfNeeded(table, message = "There are no records yet.") {
   if (!table || !table.tBodies || !table.tBodies[0]) return;
@@ -619,6 +721,8 @@ function showEmptyStateIfNeeded(table, message = "There are no records yet.") {
   if (tbody.rows.length === 0) {
     const tr = document.createElement("tr");
     tr.className = "table-empty";
+    tr.setAttribute("contenteditable", "false");   // ← block editing of this row
+
     const td = document.createElement("td");
 
     // Use header length if available; fallback to current column count or 3
@@ -629,10 +733,45 @@ function showEmptyStateIfNeeded(table, message = "There are no records yet.") {
 
     td.colSpan = colCount;
     td.textContent = message;
+
+    // Optional UX polish: don’t allow caret or selection on the text itself
+    td.setAttribute("contenteditable", "false");   // ← block editing of the cell too
+    td.style.userSelect = "none";                  // ← avoid text selection while editing
+
     tr.appendChild(td);
     tbody.appendChild(tr);
   }
 }
+
+function openNumPadForCell(td) {
+  if (!td) return;
+  _numpadTarget = td;
+
+  const pad  = document.getElementById("numpad");
+  const disp = document.getElementById("numpad-display");
+
+  // Remember the previous value (for reference) but start BLANK for quick typing
+  const prev = (td.textContent || "").trim();
+  pad.dataset.mode = "cell";
+  pad.dataset.prev = prev;
+
+  disp.value = "";                 // ← clear automatically
+  disp.placeholder = prev || "";   // ← optional: show old value as a hint
+
+  pad.classList.remove("hidden");
+  pad.removeAttribute("aria-hidden");
+  document.body.style.overflow = "hidden";
+
+  requestAnimationFrame(() => positionNumpadUnder(td));
+  _repositionPadHandler = () => positionNumpadUnder(td);
+  window.addEventListener("resize", _repositionPadHandler, { passive: true });
+  window.addEventListener("scroll", _repositionPadHandler, { passive: true });
+  window.addEventListener("orientationchange", _repositionPadHandler, { passive: true });
+
+  // Put cursor in the display so typing starts immediately
+  disp.focus();
+}
+
 
 
 // Button clicks
@@ -852,6 +991,84 @@ if ("serviceWorker" in navigator) {
     }
   });
 }
+
+// ===== Empty-state helpers =====
+function ensureEmptyLabel(container, id, text) {
+  if (!container) return null;
+  let msg = container.querySelector(`#${id}`);
+  if (!msg) {
+    msg = document.createElement("div");
+    msg.id = id;
+    msg.textContent = text || "There are no records yet";
+    msg.style.cssText = "margin:8px 0; font-size:12px; color:#333;";
+    container.appendChild(msg);
+  }
+  return msg;
+}
+
+function countRows(tbody) {
+  if (!tbody) return 0;
+  return [...tbody.querySelectorAll("tr")]
+    .filter(tr => !tr.hidden && !tr.classList.contains("table-empty")) // ← ignore placeholder row
+    .length;
+}
+
+
+function refreshEmptyState() {
+  // Use your real table IDs
+  const histTable  = document.getElementById("rank-table-hist");
+  const todayTable = document.getElementById("rank-table-today");
+
+  const histTbody  = histTable?.querySelector("tbody");
+  const todayTbody = todayTable?.querySelector("tbody");
+
+  // Toggle inline “There are no records yet” <tr>
+  showEmptyStateIfNeeded(histTable,  "There are no records yet.");
+  showEmptyStateIfNeeded(todayTable, "There are no records yet.");
+
+  const histCount  = countRows(histTbody);
+  const todayCount = countRows(todayTbody);
+
+  // If a table is empty, strip the Delete column entirely (even in edit mode)
+  if (histCount === 0)  disableDeleteUI("#rank-table-hist");
+  if (todayCount === 0) disableDeleteUI("#rank-table-today");
+
+  // Disable any delete buttons when there are no rows in either table
+  const anyRows = (histCount + todayCount) > 0;
+  document.querySelectorAll('[data-action="delete"], .btn-delete-row, .row-del').forEach(btn => {
+    btn.disabled = !anyRows;
+    btn.setAttribute("aria-disabled", !anyRows ? "true" : "false");
+  });
+}
+
+
+
+// Observe DOM changes to keep the empty-state in sync automatically
+function setupEmptyStateObservers() {
+  const histTbody  = document.querySelector("#rank-table-hist tbody");
+  const todayTbody = document.querySelector("#rank-table-today tbody");
+
+  const obs = new MutationObserver(() => refreshEmptyState());
+  if (histTbody)  obs.observe(histTbody,  { childList: true, subtree: false });
+  if (todayTbody) obs.observe(todayTbody, { childList: true, subtree: false });
+}
+
+
+document.addEventListener("click", (e) => {
+  const delBtn = e.target.closest('[data-action="delete"], .btn-delete-row, .row-del');
+  if (!delBtn) return;
+
+  const histCount  = countRows(document.querySelector("#rank-table-hist tbody"));
+  const todayCount = countRows(document.querySelector("#rank-table-today tbody"));
+
+  if ((histCount + todayCount) === 0) {
+    e.preventDefault();
+    e.stopPropagation();
+    // Optional: toast/alert
+    // alert("No records to delete.");
+  }
+}, true);
+
 
 
 // Author: Gama

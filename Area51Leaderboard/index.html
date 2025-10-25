@@ -107,6 +107,11 @@
   </div>
 </div>
 
+<script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+  window.SUPABASE_URL = "https://rhgfzhmessbxoesqkixr.supabase.co";
+  window.SUPABASE_ANON = "YOUR-ANON-PUBLIC-KEY";
+</script>
 
 <script src="main.js" defer></script>
 <script>
@@ -139,28 +144,34 @@ if ('serviceWorker' in navigator) {
       <input id="numpad-display" type="text" readonly />
     </div>
     <div class="numpad__grid">
-      <button data-k="7">7</button>
-      <button data-k="8">8</button>
-      <button data-k="9">9</button>
-
-      <button data-k="4">4</button>
-      <button data-k="5">5</button>
-      <button data-k="6">6</button>
-
+      <!-- top row: 1 2 3 -->
       <button data-k="1">1</button>
       <button data-k="2">2</button>
       <button data-k="3">3</button>
 
+      <!-- middle row: 4 5 6 (unchanged) -->
+      <button data-k="4">4</button>
+      <button data-k="5">5</button>
+      <button data-k="6">6</button>
+
+      <!-- bottom number row: 7 8 9 -->
+      <button data-k="7">7</button>
+      <button data-k="8">8</button>
+      <button data-k="9">9</button>
+
+      <!-- last row: . 0 del (unchanged) -->
       <button data-k=".">.</button>
       <button data-k="0">0</button>
       <button data-k="del" class="numpad__del">⌫</button>
     </div>
+
     <div class="numpad__actions">
       <button id="numpad-cancel" class="btn">Cancel</button>
       <button id="numpad-ok" class="btn btn--primary">OK</button>
     </div>
   </div>
 </div>
+
 <section class="rules">
   <h3 class="rules__title">Rules</h3>
   <ol class="rules__list">
