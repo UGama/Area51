@@ -1,29 +1,125 @@
 document.getElementById("copyright-year").textContent = new Date().getFullYear();
 
-// ===== LocalStorage helpers (no defaults) =====
-const STORAGE_KEYS = {
-  hist: "area51_hist_leaderboard",
-  today: "area51_today_leaderboard",
-};
+// // ===== LocalStorage helpers (no defaults) =====
+// const STORAGE_KEYS = {
+//   hist: "area51_hist_leaderboard",
+//   today: "area51_today_leaderboard",
+// };
 
-function save(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
+// function save(key, value) {
+//   localStorage.setItem(key, JSON.stringify(value));
+// }
+
+// function loadStrict(key) {
+//   try {
+//     const raw = localStorage.getItem(key);
+//     if (!raw) return [];
+//     const arr = JSON.parse(raw);
+//     return Array.isArray(arr) ? arr : [];
+//   } catch {
+//     return [];
+//   }
+// }
+
+// // ===== Live data (ALWAYS from Local Storage) =====
+// const histData = loadStrict(STORAGE_KEYS.hist);
+// const todayData = loadStrict(STORAGE_KEYS.today);
+
+// ===== Remote storage via Supabase =====
+const supabase = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON);
+
+/** Convert DB rows -> [{id,name,score}] */
+function rowsFromDB(dbRows) {
+  return dbRows
+    .map(r => ({ id: r.id, name: (r.name || "").trim(), score: Number(r.score) || 0 }))
+    .filter(r => r.name !== "");
 }
 
-function loadStrict(key) {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
+/** Convert app rows -> DB payload (board tagged) */
+function rowsToDB(board, rows) {
+  return rows.map(r => ({
+    id: Number.isInteger(r.id) ? r.id : undefined,
+    board,
+    name: (r.name || "").trim(),
+    score: Math.round((Number(r.score) || 0) * 100) / 100
+  }));
+}
+
+/** Load one board ("hist" | "today") from Supabase */
+async function loadBoard(board) {
+  const { data, error } = await supabase
+    .from('leaderboard')
+    .select('id, board, name, score')
+    .eq('board', board)
+    .order('score', { ascending: true })
+    .limit(50);
+  if (error) { console.warn('[remote] load error', error); return []; }
+  return rowsFromDB(data || []);
+}
+
+/** Save a whole board: overwrite remote with current array.
+ *  By default, refuses to clear remote data unless allowClear=true (for explicit resets).
+ */
+async function saveBoard(board, rows, opts = {}) {
+  console.log("Start");
+  const allowClear = !!opts.allowClear;
+
+  // Safety: accidental empty writes are ignored unless explicitly allowed (Reset)
+  if (!allowClear && (!rows || rows.length === 0)) {
+    console.warn(`[remote] save skipped: ${board} rows empty (allowClear=false)`);
+    return true; // treat as success, but do nothing
   }
+
+  // Strategy: delete + insert (small dataset = simple & reliable)
+  const del = await supabase.from('leaderboard').delete().eq('board', board);
+  if (del.error) { console.warn('[remote] delete error', del.error); return false; }
+
+  if (!rows.length) return true; // explicit clear (Reset) done
+
+  const toInsert = rowsToDB(board, rows);
+  const ins = await supabase.from('leaderboard').insert(toInsert).select('id');
+  if (ins.error) { console.warn('[remote] insert error', ins.error); return false; }
+
+  console.log("End");
+  // backfill ids on the client for consistency
+  const inserted = ins.data || [];
+  rows.forEach((r, i) => { if (!Number.isInteger(r.id) && inserted[i]?.id) r.id = inserted[i].id; });
+  return true;
+  
 }
 
-// ===== Live data (ALWAYS from Local Storage) =====
-const histData = loadStrict(STORAGE_KEYS.hist);
-const todayData = loadStrict(STORAGE_KEYS.today);
+
+
+// ===== Live data (now from SERVER) =====
+const histData = [];
+const todayData = [];
+
+// Ensure ids stay unique across both arrays (you already have helpers that rely on this)
+function hydrate(board, rows) {
+  const target = board === 'hist' ? histData : todayData;
+  target.splice(0, target.length, ...rows);
+}
+
+/** One-time bootstrap */
+async function init() {
+  // fetch both boards from server
+  const [histRows, todayRows] = await Promise.all([loadBoard('hist'), loadBoard('today')]);
+  hydrate('hist', histRows);
+  hydrate('today', todayRows);
+
+  const changed = ensureAllHaveIds();
+  if (changed) { await saveBoard('hist', histData); await saveBoard('today', todayData); }
+
+
+  // initial render (same render you already use)
+  renderLeaderboard(histData, "#rank-table-hist");
+  renderLeaderboard(todayData, "#rank-table-today");
+  refreshEmptyState?.();
+}
+
+// kick off after script loads
+init();
+
 
 // ===== Renderer =====
 function renderLeaderboard(rows, tableSelector) {
@@ -90,15 +186,8 @@ function tableToArray(tableSelector) {
 }
 
 
-ensureAllHaveIds();
-
-// ===== Initial render =====
-renderLeaderboard(histData, "#rank-table-hist");
-renderLeaderboard(todayData, "#rank-table-today");
-
-
 // ===== Edit toggle: when turning OFF, read table → save =====
-function toggleEditable(tableSelector, btnEl, which) {
+async function toggleEditable(tableSelector, btnEl, which) {
   const tbody = document.querySelector(`${tableSelector} tbody`);
   const card = tbody.closest(".card");
   const on = tbody.getAttribute("contenteditable") === "true";
@@ -121,11 +210,11 @@ function toggleEditable(tableSelector, btnEl, which) {
       const arr = normalizeRows(edited);
       if (which === "hist") {
         histData.splice(0, histData.length, ...arr);
-        save(STORAGE_KEYS.hist, histData);
-        renderLeaderboard(histData, "#rank-table-hist");  // re-sort & repaint
+        await saveBoard('hist', histData);
+        renderLeaderboard(histData, "#rank-table-hist");
       } else {
         todayData.splice(0, todayData.length, ...arr);
-        save(STORAGE_KEYS.today, todayData);
+        await saveBoard('today', todayData);
         renderLeaderboard(todayData, "#rank-table-today");
       }
     }
@@ -205,32 +294,69 @@ function toggleEditable(tableSelector, btnEl, which) {
   }
 }
 
-// ===== Actions (all persist) =====
-function resetHistorical() {
-  histData.splice(0, histData.length); // clear to empty
-  save(STORAGE_KEYS.hist, histData);
+// // ===== Actions (all persist) =====
+// function resetHistorical() {
+//   histData.splice(0, histData.length); // clear to empty
+//   save(STORAGE_KEYS.hist, histData);
+//   renderLeaderboard(histData, "#rank-table-hist");
+// }
+
+// // Replace the whole function with this:
+// function mergeTodayIntoHistorical() {
+//   // Make sure everything has ids (covers old data edited/added before migration)
+//   ensureAllHaveIds();
+
+//   // existing ids in Historical
+//   const existing = new Set(histData.filter(r => Number.isInteger(r.id)).map(r => r.id));
+
+//   // Append ONLY rows whose id is not already in Historical
+//   const toAdd = todayData.filter(r => !existing.has(r.id));
+//   histData.push(...toAdd);
+
+//   // Resort by least time and keep top 10 (if <=10, keeps all)
+//   keepTopNByTimeAsc(histData, 10);
+
+//   save(STORAGE_KEYS.hist, histData);
+//   renderLeaderboard(histData, "#rank-table-hist");
+// }
+
+async function resetHistorical() {
+  histData.splice(0, histData.length);
+  await saveBoard('hist', histData, { allowClear: true }); // ← explicit clear
   renderLeaderboard(histData, "#rank-table-hist");
 }
 
-// Replace the whole function with this:
-function mergeTodayIntoHistorical() {
-  // Make sure everything has ids (covers old data edited/added before migration)
+async function confirmFromModal() {
+  if (!_delContext) return;
+  const { action } = _delContext;
+
+  // ...delete branch unchanged...
+
+  if (action === "reset-hist") {
+    histData.splice(0, histData.length);
+    await saveBoard('hist', histData, { allowClear: true }); // ← explicit clear
+    renderLeaderboard(histData, "#rank-table-hist");
+  }
+
+  if (action === "reset-today") {
+    todayData.splice(0, todayData.length);
+    await saveBoard('today', todayData, { allowClear: true }); // ← explicit clear
+    renderLeaderboard(todayData, "#rank-table-today");
+  }
+
+  closeConfirmModal();
+}
+
+
+async function mergeTodayIntoHistorical() {
   ensureAllHaveIds();
-
-  // existing ids in Historical
   const existing = new Set(histData.filter(r => Number.isInteger(r.id)).map(r => r.id));
-
-  // Append ONLY rows whose id is not already in Historical
   const toAdd = todayData.filter(r => !existing.has(r.id));
   histData.push(...toAdd);
-
-  // Resort by least time and keep top 10 (if <=10, keeps all)
   keepTopNByTimeAsc(histData, 10);
-
-  save(STORAGE_KEYS.hist, histData);
+  await saveBoard('hist', histData);
   renderLeaderboard(histData, "#rank-table-hist");
 }
-
 
 function normalizeRows(rows) {
   return rows
@@ -302,49 +428,78 @@ function closeAddModal() {
   _addOpener = null;
 }
 
-function confirmAddFromModal() {
+async function confirmAddFromModal() {
   const name = (document.getElementById("add-name").value || "").trim();
-
-  // Raw string from the read-only time input (filled via keypad)
   const scoreStr = (document.getElementById("add-score").value || "").trim();
 
   // --- validations ---
-  if (!name) {
-    alert("Please enter a name.");
-    return;
-  }
-  if (scoreStr === "") {
-    alert("Please enter a time.");
-    return;
-  }
-  // Must be a finite number > 0
-  const scoreNum = Number(scoreStr);
-  if (!Number.isFinite(scoreNum)) {
-    alert("Please enter a valid time (e.g., 5.35).");
-    return;
-  }
-  if (scoreNum <= 0) {
-    alert("Time must be greater than 0.");
-    return;
-  }
+  if (!name) { alert("Please enter a name."); return; }
+  if (scoreStr === "") { alert("Please enter a time."); return; }
 
-  // Normalize to 2 decimals after validation
+  const scoreNum = Number(scoreStr);
+  if (!Number.isFinite(scoreNum)) { alert("Please enter a valid time (e.g., 5.35)."); return; }
+  if (scoreNum <= 0) { alert("Time must be greater than 0."); return; }
+
   const score = Math.round(scoreNum * 100) / 100;
 
   if (_addTarget === "today") {
     todayData.push({ id: nextGlobalId(), name, score });
     keepTopNByTimeAsc(todayData, 10);
-    save(STORAGE_KEYS.today, todayData);
+    await saveBoard('today', todayData);
     renderLeaderboard(todayData, "#rank-table-today");
   } else if (_addTarget === "hist") {
     histData.push({ id: nextGlobalId(), name, score });
     keepTopNByTimeAsc(histData, 10);
-    save(STORAGE_KEYS.hist, histData);
+    await saveBoard('hist', histData);
     renderLeaderboard(histData, "#rank-table-hist");
   }
-
   closeAddModal();
 }
+
+
+// function confirmAddFromModal() {
+//   const name = (document.getElementById("add-name").value || "").trim();
+
+//   // Raw string from the read-only time input (filled via keypad)
+//   const scoreStr = (document.getElementById("add-score").value || "").trim();
+
+//   // --- validations ---
+//   if (!name) {
+//     alert("Please enter a name.");
+//     return;
+//   }
+//   if (scoreStr === "") {
+//     alert("Please enter a time.");
+//     return;
+//   }
+//   // Must be a finite number > 0
+//   const scoreNum = Number(scoreStr);
+//   if (!Number.isFinite(scoreNum)) {
+//     alert("Please enter a valid time (e.g., 5.35).");
+//     return;
+//   }
+//   if (scoreNum <= 0) {
+//     alert("Time must be greater than 0.");
+//     return;
+//   }
+
+//   // Normalize to 2 decimals after validation
+//   const score = Math.round(scoreNum * 100) / 100;
+
+//   if (_addTarget === "today") {
+//     todayData.push({ id: nextGlobalId(), name, score });
+//     keepTopNByTimeAsc(todayData, 10);
+//     save(STORAGE_KEYS.today, todayData);
+//     renderLeaderboard(todayData, "#rank-table-today");
+//   } else if (_addTarget === "hist") {
+//     histData.push({ id: nextGlobalId(), name, score });
+//     keepTopNByTimeAsc(histData, 10);
+//     save(STORAGE_KEYS.hist, histData);
+//     renderLeaderboard(histData, "#rank-table-hist");
+//   }
+
+//   closeAddModal();
+// }
 
 
 // Add a "Delete" column with × buttons (only in edit mode)
@@ -485,12 +640,12 @@ function openConfirmModal(ctx) {
     confirmBtn.classList.add("btn--danger");
   } else if (ctx.action === "reset-hist") {
     title.textContent = "Confirm Reset";
-    msg.textContent   = "Clear all data from Historical Leaderboard? This also removes Local Storage for it.";
+    msg.textContent   = "Clear all data from Historical Leaderboard on the server?";
     confirmBtn.textContent = "Reset";
     confirmBtn.classList.add("btn--danger");
   } else if (ctx.action === "reset-today") {
     title.textContent = "Confirm Reset";
-    msg.textContent   = "Clear all data from Today's Leaderboard? This also removes Local Storage for it.";
+    msg.textContent   = "Clear all data from Today's Leaderboard on the server?";
     confirmBtn.textContent = "Reset";
     confirmBtn.classList.add("btn--danger");
   }
@@ -534,7 +689,64 @@ function closeConfirmModal() {
 }
 
 
-function confirmFromModal() {
+// function confirmFromModal() {
+//   if (!_delContext) return;
+//   const { action } = _delContext;
+
+//   if (action === "delete") {
+//     const { which, id, name, timeNum } = _delContext;
+//     const arr = which === "hist" ? histData : todayData;
+
+//     let rmIndex = -1;
+//     if (Number.isInteger(id)) {
+//       rmIndex = arr.findIndex(r => r.id === id);        // primary: by id
+//     }
+//     if (rmIndex < 0) {
+//       // fallback: by (name + time)
+//       const exact = arr.findIndex(r =>
+//         (r.name || "").trim() === name &&
+//         Math.abs(Number(r.score || 0) - timeNum) < 1e-9
+//       );
+//       rmIndex = exact >= 0 ? exact : arr.findIndex(r => (r.name || "").trim() === name);
+//     }
+
+//     if (rmIndex >= 0) arr.splice(rmIndex, 1);
+
+//     if (which === "hist") {
+//       save(STORAGE_KEYS.hist, arr);
+//       renderLeaderboard(histData, "#rank-table-hist");
+//       refreshEmptyState();
+//       maybeReattachDeleteUI("#rank-table-hist");
+//     } else {
+//       save(STORAGE_KEYS.today, arr);
+//       renderLeaderboard(todayData, "#rank-table-today");
+//       refreshEmptyState();
+//       maybeReattachDeleteUI("#rank-table-today");
+//     }
+//   }
+
+//   if (action === "reset-hist") {
+//     // clear data + remove LS key
+//     histData.splice(0, histData.length);
+//     save(STORAGE_KEYS.hist, histData); // when histData is empty
+//     renderLeaderboard(histData, "#rank-table-hist");
+//     // if in edit mode, keep the delete column visible
+//     maybeReattachDeleteUI("#rank-table-hist");
+//   }
+
+//   if (action === "reset-today") {
+//     todayData.splice(0, todayData.length);
+//     save(STORAGE_KEYS.today, todayData);
+//     renderLeaderboard(todayData, "#rank-table-today");
+//     maybeReattachDeleteUI("#rank-table-today");
+//   }
+
+//   closeConfirmModal();
+// }
+
+// ===== ID helpers =====
+
+async function confirmFromModal() {
   if (!_delContext) return;
   const { action } = _delContext;
 
@@ -542,54 +754,49 @@ function confirmFromModal() {
     const { which, id, name, timeNum } = _delContext;
     const arr = which === "hist" ? histData : todayData;
 
-    let rmIndex = -1;
-    if (Number.isInteger(id)) {
-      rmIndex = arr.findIndex(r => r.id === id);        // primary: by id
-    }
+    // 1) try by id
+    let rmIndex = Number.isInteger(id) ? arr.findIndex(r => r.id === id) : -1;
+
+    // 2) fallback: exact (name + time)
     if (rmIndex < 0) {
-      // fallback: by (name + time)
-      const exact = arr.findIndex(r =>
+      rmIndex = arr.findIndex(r =>
         (r.name || "").trim() === name &&
-        Math.abs(Number(r.score || 0) - timeNum) < 1e-9
+        Math.abs(Number(r.score || 0) - Number(timeNum)) < 1e-9
       );
-      rmIndex = exact >= 0 ? exact : arr.findIndex(r => (r.name || "").trim() === name);
+    }
+
+    // 3) final fallback: first by name
+    if (rmIndex < 0) {
+      rmIndex = arr.findIndex(r => (r.name || "").trim() === name);
     }
 
     if (rmIndex >= 0) arr.splice(rmIndex, 1);
 
     if (which === "hist") {
-      save(STORAGE_KEYS.hist, arr);
+      await saveBoard('hist', arr);
       renderLeaderboard(histData, "#rank-table-hist");
-      refreshEmptyState();
-      maybeReattachDeleteUI("#rank-table-hist");
     } else {
-      save(STORAGE_KEYS.today, arr);
+      await saveBoard('today', arr);
       renderLeaderboard(todayData, "#rank-table-today");
-      refreshEmptyState();
-      maybeReattachDeleteUI("#rank-table-today");
     }
   }
 
   if (action === "reset-hist") {
-    // clear data + remove LS key
     histData.splice(0, histData.length);
-    save(STORAGE_KEYS.hist, histData); // when histData is empty
+    await saveBoard('hist', histData, { allowClear: true }); // ← explicit clear
     renderLeaderboard(histData, "#rank-table-hist");
-    // if in edit mode, keep the delete column visible
-    maybeReattachDeleteUI("#rank-table-hist");
   }
 
   if (action === "reset-today") {
     todayData.splice(0, todayData.length);
-    save(STORAGE_KEYS.today, todayData);
+    await saveBoard('today', todayData, { allowClear: true }); // ← explicit clear
     renderLeaderboard(todayData, "#rank-table-today");
-    maybeReattachDeleteUI("#rank-table-today");
   }
 
   closeConfirmModal();
 }
 
-// ===== ID helpers =====
+
 function collectIds() {
   return [...histData, ...todayData]
     .map(r => r?.id)
@@ -600,22 +807,34 @@ function nextGlobalId() {
   return ids.length ? Math.max(...ids) + 1 : 0;
 }
 // Ensure BOTH arrays have unique ids; assign sequentially starting at nextGlobalId()
+// function ensureAllHaveIds() {
+//   let changed = false;
+//   let nextId = nextGlobalId();
+//   for (const arr of [histData, todayData]) {
+//     for (const r of arr) {
+//       if (!Number.isInteger(r.id)) {
+//         r.id = nextId++;
+//         changed = true;
+//       }
+//     }
+//   }
+//   if (changed) {
+//     save(STORAGE_KEYS.hist, histData);
+//     save(STORAGE_KEYS.today, todayData);
+//   }
+// }
+
 function ensureAllHaveIds() {
   let changed = false;
   let nextId = nextGlobalId();
   for (const arr of [histData, todayData]) {
     for (const r of arr) {
-      if (!Number.isInteger(r.id)) {
-        r.id = nextId++;
-        changed = true;
-      }
+      if (!Number.isInteger(r.id)) { r.id = nextId++; changed = true; }
     }
   }
-  if (changed) {
-    save(STORAGE_KEYS.hist, histData);
-    save(STORAGE_KEYS.today, todayData);
-  }
+  return changed; // let the caller decide whether to saveBoard(...)
 }
+
 
 let _numpadTarget = null;
 let _repositionPadHandler = null;
@@ -700,14 +919,18 @@ function applyNumPadValue() {
     if (_numpadTarget.tagName === "INPUT") {
       _numpadTarget.value = raw;
     } else {
-      const num = Math.round((parseFloat(raw) || 0) * 100) / 100;
-      _numpadTarget.textContent = num.toFixed(2);
+      if (raw.trim() === "") { closeNumPad(); return; } // ← keep old value
+      const num = Number(raw);
+      if (!Number.isFinite(num)) { closeNumPad(); return; } // ← ignore bad input
+      const n2 = Math.round(num * 100) / 100;
+      _numpadTarget.textContent = n2.toFixed(2);
       const tbody = _numpadTarget.closest("tbody");
       if (tbody && typeof tbody._markDirty === "function") tbody._markDirty();
     }
   }
   closeNumPad();
 }
+
 
 
 function showEmptyStateIfNeeded(table, message = "There are no records yet.") {
@@ -925,15 +1148,15 @@ document.getElementById("add-modal")?.addEventListener("click", (e) => {
 
 
 // (Optional) storage dump button you already added
-document.getElementById('dump-storage')?.addEventListener('click', () => {
-  const hist = JSON.parse(localStorage.getItem(STORAGE_KEYS.hist) || '[]');
-  const today = JSON.parse(localStorage.getItem(STORAGE_KEYS.today) || '[]');
-  console.log('Historical:', hist);
-  console.table(hist);
-  console.log("Today's:", today);
-  console.table(today);
-  alert('Opened console with Local Storage contents.');
-});
+// document.getElementById('dump-storage')?.addEventListener('click', () => {
+//   const hist = JSON.parse(localStorage.getItem(STORAGE_KEYS.hist) || '[]');
+//   const today = JSON.parse(localStorage.getItem(STORAGE_KEYS.today) || '[]');
+//   console.log('Historical:', hist);
+//   console.table(hist);
+//   console.log("Today's:", today);
+//   console.table(today);
+//   alert('Opened console with Local Storage contents.');
+// });
 // Confirm/Cancel for the generic confirm modal
 document.getElementById("del-cancel")?.addEventListener("click", closeConfirmModal);
 document.getElementById("del-confirm")?.addEventListener("click", confirmFromModal);
@@ -979,18 +1202,18 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("./service-worker.js");
+// if ("serviceWorker" in navigator) {
+//   navigator.serviceWorker.register("./service-worker.js");
 
-  // Auto-reload once when a new SW activates
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    // Prevent reload loops
-    if (!window.__reloadedAfterSW) {
-      window.__reloadedAfterSW = true;
-      window.location.reload();
-    }
-  });
-}
+//   // Auto-reload once when a new SW activates
+//   navigator.serviceWorker.addEventListener("controllerchange", () => {
+//     // Prevent reload loops
+//     if (!window.__reloadedAfterSW) {
+//       window.__reloadedAfterSW = true;
+//       window.location.reload();
+//     }
+//   });
+// }
 
 // ===== Empty-state helpers =====
 function ensureEmptyLabel(container, id, text) {
@@ -1053,21 +1276,44 @@ function setupEmptyStateObservers() {
   if (todayTbody) obs.observe(todayTbody, { childList: true, subtree: false });
 }
 
+document.getElementById("add-score")
+  ?.addEventListener("click", () => openNumPadFor("#add-score"));
 
+
+// Prevent pointless delete actions when there's nothing to delete.
+// Handles toolbar delete/reset buttons and per-row ".row-del" buttons.
 document.addEventListener("click", (e) => {
-  const delBtn = e.target.closest('[data-action="delete"], .btn-delete-row, .row-del');
-  if (!delBtn) return;
+  const btn = e.target.closest('[data-action="delete"], .btn-delete-row, .row-del');
+  if (!btn) return;
 
-  const histCount  = countRows(document.querySelector("#rank-table-hist tbody"));
-  const todayCount = countRows(document.querySelector("#rank-table-today tbody"));
-
-  if ((histCount + todayCount) === 0) {
+  // If already disabled by UI, just swallow.
+  if (btn.matches('[disabled], [aria-disabled="true"]')) {
     e.preventDefault();
-    e.stopPropagation();
-    // Optional: toast/alert
-    // alert("No records to delete.");
+    e.stopImmediatePropagation();
+    return;
+  }
+
+  // Row delete buttons only render when a row exists -> allow.
+  if (btn.classList.contains("row-del")) return;
+
+  // For toolbar delete buttons, prefer a specific target table via data-target
+  // e.g. <button data-action="delete" data-target="#rank-table-hist">Reset</button>
+  const targetSel = btn.getAttribute("data-target");
+  const tbody = targetSel ? document.querySelector(`${targetSel} tbody`) : null;
+
+  // If no explicit target, fall back to sum of both tables
+  const count = tbody
+    ? countRows(tbody)
+    : (countRows(document.querySelector("#rank-table-hist tbody")) +
+       countRows(document.querySelector("#rank-table-today tbody")));
+
+  if (count === 0) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    alert("No records to delete.");
   }
 }, true);
+
 
 
 
