@@ -262,6 +262,7 @@ th.del-col, td.del-col { text-align: center; width: 40px; }
   border-radius: 14px;
   box-shadow: 0 12px 40px rgba(0,0,0,.2);
   padding: 16px;
+  margin-top: 0;
 }
 .numpad__display {
   margin-bottom: 10px;
@@ -396,6 +397,8 @@ td.has-medal[data-medal="bronze"]::after { content: "🥉"; }
   position: fixed;                   /* we’ll set top/left via JS */
   pointer-events: auto;              /* panel itself is interactive */
   width: min(92vw, 360px);
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 /* small horizontal nudge for overall page so it’s not “stuck” to edges */

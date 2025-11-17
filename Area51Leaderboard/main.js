@@ -840,29 +840,33 @@ let _numpadTarget = null;
 let _repositionPadHandler = null;
 
 /** Position keypad under the input, but never overlapping the modal panel */
-function positionNumpadUnder(targetInput) {
-  const pad   = document.getElementById("numpad");
-  const panel = pad?.querySelector(".numpad__panel");
+function positionNumpadUnder(targetEl) {
+  const pad        = document.getElementById("numpad");
+  const panel      = pad?.querySelector(".numpad__panel");
   const modalPanel = document.querySelector("#add-modal .modal__panel");
-  if (!pad || !panel || !targetInput) return;
+  const topbar     = document.querySelector(".topbar");
+  if (!pad || !panel) return;
 
   pad.classList.add("numpad--anchored");
 
-  // where the input sits
-  const inputRect = targetInput.getBoundingClientRect();
-  // where the modal panel ends (so we don't overlap it)
-  const modalRect = modalPanel?.getBoundingClientRect();
+  const modalOpen = !!(modalPanel && modalPanel.offsetParent !== null);
 
-  const gap = 16;     // space under input
-  const guard = 8;    // extra space under modal panel
+  let top = 0;
 
-  // ideal position just under the input
-  let top = inputRect.bottom + gap;
+  if (modalOpen && targetEl) {
+    // ADD flow: keep your existing behavior — under the input,
+    // but never overlap the modal panel bottom
+    const inputRect = targetEl.getBoundingClientRect();
+    const modalRect = modalPanel.getBoundingClientRect();
+    const guard = 8;   // small gap under modal panel
+    top = Math.max(inputRect.bottom, modalRect.bottom + guard);
+  } else {
+    // EDIT flow: mimic the add experience — place under the topbar
+    const tb = topbar?.getBoundingClientRect();
+    const gapBelowTopbar = 12; // tiny breathing room
+    top = (tb ? tb.bottom : 0) + gapBelowTopbar;
+  }
 
-  // SAFETY: never overlap the modal panel — push below it if needed
-  if (modalRect) top = Math.max(top, modalRect.bottom + guard);
-
-  // Horizontal centering is handled by CSS (left:50% + translateX)
   panel.style.top = `${Math.round(top)}px`;
 }
 
@@ -879,6 +883,8 @@ function openNumPadFor(inputSelector) {
   pad.classList.remove("hidden");
   pad.removeAttribute("aria-hidden");
   document.body.style.overflow = "hidden";
+
+  installZoomGuards(pad); 
 
   // wait a frame so layout is correct, then position
   requestAnimationFrame(() => positionNumpadUnder(input));
@@ -899,6 +905,8 @@ function closeNumPad() {
   pad.classList.remove("numpad--anchored");
   document.body.style.overflow = "";
   _numpadTarget = null;
+
+  removeZoomGuards(); 
 
   if (_repositionPadHandler) {
     window.removeEventListener("resize", _repositionPadHandler);
@@ -984,6 +992,8 @@ function openNumPadForCell(td) {
   pad.classList.remove("hidden");
   pad.removeAttribute("aria-hidden");
   document.body.style.overflow = "hidden";
+
+  installZoomGuards(pad); 
 
   requestAnimationFrame(() => positionNumpadUnder(td));
   _repositionPadHandler = () => positionNumpadUnder(td);
@@ -1125,6 +1135,60 @@ function handleRowDelete(e, which, tableSelector) {
     maybeReattachDeleteUI("#rank-table-today");
   }
 }
+
+// --- Temporary zoom guard (iPad/iOS) just during numeric input ---
+let _zoomGuards = null;
+
+function installZoomGuards(container = document) {
+  if (_zoomGuards) return;
+
+  let lastTouchEnd = 0;
+
+  // Block double-tap zoom inside the given container
+  const onTouchEnd = (e) => {
+    const now = Date.now();
+    if (now - lastTouchEnd <= 300) {
+      e.preventDefault();             // cancel double-tap zoom
+    }
+    lastTouchEnd = now;
+  };
+
+  // Block pinch-zoom while entering numbers
+  const onGestureStart = (e) => { e.preventDefault(); };
+
+  // Must be passive:false so preventDefault() actually works
+  container.addEventListener('touchend', onTouchEnd, { passive: false });
+  container.addEventListener('gesturestart', onGestureStart, { passive: false });
+
+  // Extra safety on iOS: temporarily lock viewport scaling
+  const vp = document.querySelector('meta[name="viewport"]');
+  const original = vp?.getAttribute('content') || '';
+  if (vp) {
+    // append flags without losing your existing settings
+    const appended = original.includes('user-scalable')
+      ? original.replace(/user-scalable=\s*\w+/i, 'user-scalable=no')
+               .replace(/maximum-scale=\s*[\d.]+/i, 'maximum-scale=1')
+      : `${original}, maximum-scale=1, user-scalable=no`;
+    vp.setAttribute('content', appended);
+  }
+
+  _zoomGuards = { container, onTouchEnd, onGestureStart, vp, original };
+}
+
+function removeZoomGuards() {
+  const g = _zoomGuards;
+  if (!g) return;
+
+  g.container.removeEventListener('touchend', g.onTouchEnd);
+  g.container.removeEventListener('gesturestart', g.onGestureStart);
+
+  // Restore original viewport so double-tap/pinch work again elsewhere
+  if (g.vp) g.vp.setAttribute('content', g.original);
+
+  _zoomGuards = null;
+}
+
+
 
 
 // Modal controls
