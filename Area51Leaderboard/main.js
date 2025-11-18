@@ -81,7 +81,8 @@ async function loadBoard(board) {
       .limit(600);
     if (error) { console.warn('[remote] load error', error); return []; }
     const merged = rowsFromDB(data || []).sort((a,b)=>Number(a.score||0)-Number(b.score||0));
-    return merged.slice(0, 50);
+    const limit = 10;
+    return merged.slice(0, limit);
   }
 }
 
