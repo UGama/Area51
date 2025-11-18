@@ -502,3 +502,20 @@ td.has-medal[data-medal="bronze"]::after { content: "🥉"; }
 
 /* tiny space between input and keypad */
 #add-score { margin-bottom: 8px; }
+
+/* Venue switcher (rounded rectangles) */
+.venue-switch{
+  display:flex; gap:8px; align-items:center;
+  margin: 10px 0 16px; flex-wrap:wrap;
+}
+.venue-pill{
+  appearance:none; border:1px solid #d6cbe3;
+  background:#f7f3fb; color:#331b48;
+  padding:8px 14px; border-radius:999px;
+  font-weight:700; cursor:pointer;
+  box-shadow:0 2px 6px rgba(0,0,0,.05);
+}
+.venue-pill:hover{ background:#efe7f8; }
+.venue-pill.is-active{
+  background: var(--brand); color:#fff; border-color: var(--brand);
+}
