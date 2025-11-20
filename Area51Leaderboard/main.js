@@ -28,20 +28,22 @@ document.getElementById("copyright-year").textContent = new Date().getFullYear()
 // ===== Remote storage via Supabase =====
 const supabase = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON);
 
+let GLOBAL_NEXT_ID = 0;
+
 /** Convert DB rows -> [{id,name,score}] */
 function rowsFromDB(dbRows) {
   return (dbRows || [])
-    .filter(r => Number(r.status) === 1)                  // ← keep only active
     .map(r => ({
-      id: r.id,
+      id: r.id == null ? undefined : Number(r.id),
       name: (r.name || "").trim(),
       score: Number(r.score) || 0,
-      venue: (r.venue || "").trim(),
-      board: (r.board || "").trim(),
-      status: Number(r.status) || 0
+      venue: r.venue,
+      board: r.board,
+      status: r.status
     }))
     .filter(r => r.name !== "");
 }
+
 
 /** Build DB payload for a single row write */
 function toDBPayload(boardKeyStr, venueStr, row, status=1) {
@@ -56,35 +58,59 @@ function toDBPayload(boardKeyStr, venueStr, row, status=1) {
 }
 
 /** Load one board ("hist" | "today") respecting venue and status=1 */
+/** Load one board ("hist" | "today") from Supabase */
 async function loadBoard(board) {
+  const ACTIVE = 1;
+
   if (currentVenue !== "all") {
-    // Specific venue
+    // For a single venue:
+    //  - Historical page: board IN ['hist', 'both']
+    //  - Today page:      board IN ['today', 'both']
+    const boardsToInclude = board === "hist"
+      ? ["hist", "both"]
+      : ["today", "both"];
+
     const { data, error } = await supabase
-      .from('leaderboard')
-      .select('id, board, venue, name, score, status')
-      .eq('board', boardKey(board, currentVenue))   // now 'hist' or 'today'
-      .eq('venue', currentVenue)                    // filter venue here
-      .eq('status', 1)                              // only active
-      .order('score', { ascending: true })
+      .from("leaderboard")
+      .select("id, board, venue, name, score, status")
+      .in("board", boardsToInclude)
+      .eq("venue", currentVenue)
+      .eq("status", ACTIVE)
+      .order("score", { ascending: true })
       .limit(200);
-    if (error) { console.warn('[remote] load error', error); return []; }
+
+    if (error) {
+      console.warn("[remote] load error", error);
+      return [];
+    }
     return rowsFromDB(data || []);
   } else {
-    // ALL view — IMPORTANT: do NOT build a list of board keys anymore.
+    // ALL view = merge all venues, same rule for board
+    const boardsToInclude = board === "hist"
+      ? ["hist", "both"]
+      : ["today", "both"];
+
     const { data, error } = await supabase
-      .from('leaderboard')
-      .select('id, board, venue, name, score, status')
-      .eq('board', board)               // 'hist' or 'today'
-      .in('venue', VENUES)              // merge all venues
-      .eq('status', 1)                  // only active
-      .order('score', { ascending: true })
+      .from("leaderboard")
+      .select("id, board, venue, name, score, status")
+      .in("board", boardsToInclude)
+      .in("venue", VENUES)
+      .eq("status", ACTIVE)
+      .order("score", { ascending: true })
       .limit(600);
-    if (error) { console.warn('[remote] load error', error); return []; }
-    const merged = rowsFromDB(data || []).sort((a,b)=>Number(a.score||0)-Number(b.score||0));
-    const limit = 10;
-    return merged.slice(0, limit);
+
+    if (error) {
+      console.warn("[remote] load error", error);
+      return [];
+    }
+
+    const merged = rowsFromDB(data || []).sort(
+      (a, b) => Number(a.score || 0) - Number(b.score || 0)
+    );
+    return merged.slice(0, 10);
   }
 }
+
 
 /**
  * Save the current board by:
@@ -161,13 +187,17 @@ function hydrate(board, rows) {
 
 /** One-time bootstrap */
 async function init(){
-  // venue pill clicks
   document.querySelectorAll(".venue-pill").forEach(b=>{
     b.addEventListener("click", ()=> setVenue(b.dataset.venue));
   });
+
+  // NEW: get the current max id once, at startup
+  await initNextIdFromServer();
+
   await refreshFromServer();
 }
 init();
+
 
 
 function renderLeaderboard(rows, tableSelector) {
@@ -262,19 +292,21 @@ async function toggleEditable(tableSelector, btnEl, which) {
     const edited = tableToArray(tableSelector);
     const before = tbody._snapshot || [];
 
-    // Only save if changed
+    // Only save if changed (still use normalized compare)
     if (!isSameData(before, edited)) {
-      const arr = normalizeRows(edited);
-      if (which === "hist") {
-        histData.splice(0, histData.length, ...arr);
-        await saveBoard('hist', histData);
-        renderLeaderboard(histData, "#rank-table-hist");
-      } else {
-        todayData.splice(0, todayData.length, ...arr);
-        await saveBoard('today', todayData);
-        renderLeaderboard(todayData, "#rank-table-today");
-      }
+      const merged = mergeEditsIntoData(which, edited);
+
+    if (which === "hist") {
+      histData.splice(0, histData.length, ...merged);
+      await saveBoard("hist", histData);
+      renderLeaderboard(histData, "#rank-table-hist");
+    } else {
+      todayData.splice(0, todayData.length, ...merged);
+      await saveBoard("today", todayData);
+      renderLeaderboard(todayData, "#rank-table-today");
     }
+  }
+
 
     showEmptyStateIfNeeded(document.getElementById("rank-table-hist"));
     showEmptyStateIfNeeded(document.getElementById("rank-table-today"));
@@ -391,48 +423,45 @@ async function resetHistorical() {
   renderLeaderboard(histData, "#rank-table-hist");
 }
 
-async function confirmFromModal() {
-  if (!_delContext) return;
-  const { action } = _delContext;
 
-  // ...delete branch unchanged...
-
-  if (action === "reset-hist") {
-  await supabase.from('leaderboard')
-    .update({ status: 2 })
-    .eq('board', boardKey('hist', currentVenue))
-    .eq('venue', currentVenue)
-    .eq('status', 1);
-
-  histData.splice(0, histData.length);
-  renderLeaderboard(histData, "#rank-table-hist");
-}
-
-if (action === "reset-today") {
-  await supabase.from('leaderboard')
-    .update({ status: 2 })
-    .eq('board', boardKey('today', currentVenue))
-    .eq('venue', currentVenue)
-    .eq('status', 1);
-
-  todayData.splice(0, todayData.length);
-  renderLeaderboard(todayData, "#rank-table-today");
-}
-
-  closeConfirmModal();
-}
 
 
 async function mergeTodayIntoHistorical() {
+  if (currentVenue === "all") {
+    alert("Please pick a specific venue before merging.");
+    return;
+  }
+
   ensureAllHaveIds();
-  const existing = new Set(histData.filter(r => Number.isInteger(r.id)).map(r => r.id));
-  const toAdd = todayData.filter(r => !existing.has(r.id));
-  histData.push(...toAdd);
-  keepTopNByTimeAsc(histData, 10);
-  await saveBoard('hist', histData);
-  renderLeaderboard(histData, "#rank-table-hist");
-  await enforceTopNStatus('hist', 10);
+
+  // Only promote rows that are currently on Today and have a real id
+  const idsToPromote = todayData
+    .filter(r => r.board === "today" && r.id != null)
+    .map(r => Number(r.id));
+
+  if (!idsToPromote.length) {
+    alert("No new rows to merge.");
+    return;
+  }
+
+  // In the DB: mark them as board = 'both' (still status = 1)
+  const { error } = await supabase
+    .from("leaderboard")
+    .update({ board: "both" })
+    .in("id", idsToPromote)
+    .eq("venue", currentVenue)
+    .eq("status", 1);
+
+  if (error) {
+    console.warn("[merge] update error", error);
+    alert("Merge failed, please check the connection.");
+    return;
+  }
+
+  // Reload both boards so UI reflects the new 'both' rows
+  await refreshFromServer();
 }
+
 
 function normalizeRows(rows) {
   return rows
@@ -787,118 +816,154 @@ function closeConfirmModal() {
   _delContext = null;
 }
 
-
-// function confirmFromModal() {
-//   if (!_delContext) return;
-//   const { action } = _delContext;
-
-//   if (action === "delete") {
-//     const { which, id, name, timeNum } = _delContext;
-//     const arr = which === "hist" ? histData : todayData;
-
-//     let rmIndex = -1;
-//     if (Number.isInteger(id)) {
-//       rmIndex = arr.findIndex(r => r.id === id);        // primary: by id
-//     }
-//     if (rmIndex < 0) {
-//       // fallback: by (name + time)
-//       const exact = arr.findIndex(r =>
-//         (r.name || "").trim() === name &&
-//         Math.abs(Number(r.score || 0) - timeNum) < 1e-9
-//       );
-//       rmIndex = exact >= 0 ? exact : arr.findIndex(r => (r.name || "").trim() === name);
-//     }
-
-//     if (rmIndex >= 0) arr.splice(rmIndex, 1);
-
-//     if (which === "hist") {
-//       save(STORAGE_KEYS.hist, arr);
-//       renderLeaderboard(histData, "#rank-table-hist");
-//       refreshEmptyState();
-//       maybeReattachDeleteUI("#rank-table-hist");
-//     } else {
-//       save(STORAGE_KEYS.today, arr);
-//       renderLeaderboard(todayData, "#rank-table-today");
-//       refreshEmptyState();
-//       maybeReattachDeleteUI("#rank-table-today");
-//     }
-//   }
-
-//   if (action === "reset-hist") {
-//     // clear data + remove LS key
-//     histData.splice(0, histData.length);
-//     save(STORAGE_KEYS.hist, histData); // when histData is empty
-//     renderLeaderboard(histData, "#rank-table-hist");
-//     // if in edit mode, keep the delete column visible
-//     maybeReattachDeleteUI("#rank-table-hist");
-//   }
-
-//   if (action === "reset-today") {
-//     todayData.splice(0, todayData.length);
-//     save(STORAGE_KEYS.today, todayData);
-//     renderLeaderboard(todayData, "#rank-table-today");
-//     maybeReattachDeleteUI("#rank-table-today");
-//   }
-
-//   closeConfirmModal();
-// }
-
 // ===== ID helpers =====
 
 async function confirmFromModal() {
   if (!_delContext) return;
-  const { action } = _delContext;
+  const { action, which, id } = _delContext;
 
-  if (action === "delete") {
-    const { which, id } = _delContext;
-    const arr = which === "hist" ? histData : todayData;
+  // --- DELETE ---
+  if (action === "delete" && id != null) {
+    // we only care about board logic on Today
+    if (which === "today") {
+      const row = todayData.find(r => Number(r.id) === Number(id));
+      const currentBoard = row?.board || "today";
 
+      if (currentBoard === "both") {
+        // Keep it on Historical only: board -> 'hist', status stays 1
+        const { error } = await supabase
+          .from("leaderboard")
+          .update({ board: "hist", status: 1 })
+          .eq("id", id);
 
-    // 1) try by id
-    let rmIndex = Number.isInteger(id) ? arr.findIndex(r => r.id === id) : -1;
+        if (error) {
+          console.warn("[delete-today/both] error", error);
+          alert("Delete failed.");
+          closeConfirmModal();
+          return;
+        }
+      } else {
+        // Normal delete from Today: status -> 0
+        const { error } = await supabase
+          .from("leaderboard")
+          .update({ status: 0 })
+          .eq("id", id);
 
-    // 2) fallback: exact (name + time)
-    if (rmIndex < 0) {
-      rmIndex = arr.findIndex(r =>
-        (r.name || "").trim() === name &&
-        Math.abs(Number(r.score || 0) - Number(timeNum)) < 1e-9
-      );
+        if (error) {
+          console.warn("[delete-today] error", error);
+          alert("Delete failed.");
+          closeConfirmModal();
+          return;
+        }
+      }
+    } else if (which === "hist") {
+      // Historical delete = hard delete (status 0)
+      const row = histData.find(r => Number(r.id) === Number(id));
+      const currentBoard = row?.board || "hist";
+
+      if (currentBoard === "both") {
+        const { error } = await supabase
+          .from("leaderboard")
+          .update({ board: "today", status: 1 })
+          .eq("id", id);
+
+        if (error) {
+          console.warn("[delete-hist/both->today] error", error);
+          alert("Delete failed.");
+          closeConfirmModal();
+          return;
+        }
+      } else {
+        const { error } = await supabase
+          .from("leaderboard")
+          .update({ status: 0 })
+          .eq("id", id);
+
+        if (error) {
+          console.warn("[delete-hist] error", error);
+          alert("Delete failed.");
+          closeConfirmModal();
+          return;
+        }
+      }
     }
-
-    // 3) final fallback: first by name
-    if (rmIndex < 0) {
-      rmIndex = arr.findIndex(r => (r.name || "").trim() === name);
-    }
-
-    if (rmIndex >= 0) arr.splice(rmIndex, 1);
-
-    if (which === "hist") {
-      await saveBoard('hist', arr);
-      renderLeaderboard(histData, "#rank-table-hist");
-    } else {
-      await saveBoard('today', arr);
-      renderLeaderboard(todayData, "#rank-table-today");
-    }
-    if (Number.isInteger(id)) {
-    const { error: delErr } = await supabase
-      .from('leaderboard')
-      .update({ status: 0 })
-      .eq('id', id);
-    if (delErr) console.warn('[remote] soft-delete error', delErr);
-  }
+    await refreshFromServer();
+    closeConfirmModal();
+    return;
   }
 
   if (action === "reset-hist") {
+    if (currentVenue === "all") {
+      alert("Pick a specific venue before resetting Historical.");
+    } else {
+      // 1) rows that are BOTH -> keep only on Today
+      const { error: errBothToToday } = await supabase
+        .from("leaderboard")
+        .update({ board: "today", status: 1 })
+        .eq("venue", currentVenue)
+        .eq("board", "both")
+        .eq("status", 1);
+
+      if (errBothToToday) {
+        console.warn("[reset-hist] both->today error", errBothToToday);
+      }
+
+      // 2) rows that are only HIST -> archive
+      const { error: errHistArchive } = await supabase
+        .from("leaderboard")
+        .update({ status: 2 })
+        .eq("venue", currentVenue)
+        .eq("board", "hist")
+        .eq("status", 1);
+
+      if (errHistArchive) {
+        console.warn("[reset-hist] hist->status2 error", errHistArchive);
+      }
+    }
+
+    // Clear Historical locally & reload from DB
     histData.splice(0, histData.length);
-    await saveBoard('hist', histData, { allowClear: true }); // ← explicit clear
-    renderLeaderboard(histData, "#rank-table-hist");
+    await refreshFromServer();
+    closeConfirmModal();
+    return;
   }
 
   if (action === "reset-today") {
+    if (currentVenue === "all") {
+      alert("Pick a specific venue before resetting Today.");
+    } else {
+      // 1) rows that are BOTH -> keep only on Historical
+      const { error: errBoth } = await supabase
+        .from("leaderboard")
+        .update({ board: "hist" })
+        .eq("venue", currentVenue)
+        .eq("board", "both")
+        .eq("status", 1);
+
+      if (errBoth) {
+        console.warn("[reset-today] update both->hist error", errBoth);
+      }
+
+      // 2) rows that are only TODAY -> soft delete (status 0)
+      const { error: errToday } = await supabase
+        .from("leaderboard")
+        .update({ status: 0 })
+        .eq("venue", currentVenue)
+        .eq("board", "today")
+        .eq("status", 1);
+
+      if (errToday) {
+        console.warn("[reset-today] delete today error", errToday);
+      }
+    }
+
+    // Clear Today locally & reload from DB
     todayData.splice(0, todayData.length);
-    await saveBoard('today', todayData, { allowClear: true }); // ← explicit clear
-    renderLeaderboard(todayData, "#rank-table-today");
+    await refreshFromServer();
+    closeConfirmModal();
+    return;
   }
+
 
   
 
@@ -906,15 +971,31 @@ async function confirmFromModal() {
 }
 
 
-function collectIds() {
-  return [...histData, ...todayData]
-    .map(r => r?.id)
-    .filter(id => Number.isInteger(id));
+async function initNextIdFromServer() {
+  try {
+    const { data, error } = await supabase
+      .from('leaderboard')
+      .select('id')
+      .order('id', { ascending: false })
+      .limit(1);
+
+    if (!error && data && data.length && data[0].id != null) {
+      GLOBAL_NEXT_ID = Number(data[0].id) || 0;
+    } else {
+      GLOBAL_NEXT_ID = 0;
+    }
+  } catch (e) {
+    console.warn('[id] failed to init max id from server', e);
+    GLOBAL_NEXT_ID = 0;
+  }
 }
+
+// Whenever we need a new id, just bump the counter
 function nextGlobalId() {
-  const ids = collectIds();
-  return ids.length ? Math.max(...ids) + 1 : 0;
+  GLOBAL_NEXT_ID += 1;
+  return GLOBAL_NEXT_ID;
 }
+
 
 function ensureAllHaveIds() {
   let changed = false;
@@ -1370,6 +1451,52 @@ async function enforceTopNStatus(board, n = 10) {
   renderLeaderboard(todayData, "#rank-table-today");
 }
 
+function mergeEditsIntoData(which, editedRows) {
+  const target = which === "hist" ? histData : todayData;
+  const existingById = new Map(
+    target
+      .filter(r => Number.isInteger(r.id))
+      .map(r => [r.id, r])
+  );
+
+  let nextId = nextGlobalId();
+  const result = [];
+
+  for (const r of editedRows) {
+    const cleanName  = (r.name || "").trim();
+    const cleanScore = Math.round((Number(r.score) || 0) * 100) / 100;
+    if (!cleanName) continue;
+
+    let rowObj;
+
+    if (Number.isInteger(r.id) && existingById.has(r.id)) {
+      // Update existing row: keep board/venue/status
+      const existing = existingById.get(r.id);
+      existingById.delete(r.id);
+      rowObj = {
+        ...existing,
+        name: cleanName,
+        score: cleanScore
+      };
+    } else {
+      // New row created in edit mode
+      const baseBoard = which === "hist" ? "hist" : "today";
+      rowObj = {
+        id: Number.isInteger(r.id) ? r.id : nextId++,
+        name: cleanName,
+        score: cleanScore,
+        board: baseBoard,         // new rows belong to the editing board
+        venue: currentVenue,
+        status: 1
+      };
+    }
+
+    result.push(rowObj);
+  }
+
+  // Any rows left in existingById were removed in the UI → they disappear from this board’s view
+  return result;
+}
 
 
 // Modal controls
