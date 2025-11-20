@@ -383,31 +383,6 @@ async function toggleEditable(tableSelector, btnEl, which) {
   }
 }
 
-// // ===== Actions (all persist) =====
-// function resetHistorical() {
-//   histData.splice(0, histData.length); // clear to empty
-//   save(STORAGE_KEYS.hist, histData);
-//   renderLeaderboard(histData, "#rank-table-hist");
-// }
-
-// // Replace the whole function with this:
-// function mergeTodayIntoHistorical() {
-//   // Make sure everything has ids (covers old data edited/added before migration)
-//   ensureAllHaveIds();
-
-//   // existing ids in Historical
-//   const existing = new Set(histData.filter(r => Number.isInteger(r.id)).map(r => r.id));
-
-//   // Append ONLY rows whose id is not already in Historical
-//   const toAdd = todayData.filter(r => !existing.has(r.id));
-//   histData.push(...toAdd);
-
-//   // Resort by least time and keep top 10 (if <=10, keeps all)
-//   keepTopNByTimeAsc(histData, 10);
-
-//   save(STORAGE_KEYS.hist, histData);
-//   renderLeaderboard(histData, "#rank-table-hist");
-// }
 
 async function resetHistorical() {
   if (currentVenue === "all") return;
@@ -432,35 +407,34 @@ async function mergeTodayIntoHistorical() {
     return;
   }
 
-  ensureAllHaveIds();
-
-  // Only promote rows that are currently on Today and have a real id
-  const idsToPromote = todayData
-    .filter(r => r.board === "today" && r.id != null)
-    .map(r => Number(r.id));
-
-  if (!idsToPromote.length) {
-    alert("No new rows to merge.");
-    return;
-  }
-
-  // In the DB: mark them as board = 'both' (still status = 1)
-  const { error } = await supabase
+  // Optional: check if there is anything to merge
+  const { data, error } = await supabase
     .from("leaderboard")
-    .update({ board: "both" })
-    .in("id", idsToPromote)
+    .select("id")
     .eq("venue", currentVenue)
-    .eq("status", 1);
+    .eq("status", 1)
+    .eq("board", "today")
+    .limit(1);
 
   if (error) {
-    console.warn("[merge] update error", error);
+    console.warn("[merge] pre-check error", error);
     alert("Merge failed, please check the connection.");
     return;
   }
 
-  // Reload both boards so UI reflects the new 'both' rows
-  await refreshFromServer();
+  if (!data || !data.length) {
+    alert("No new rows to merge.");
+    return;
+  }
+
+  // 1) Apply your Historical top-10 rules (this is the real 'merge')
+  await enforceTopNStatus("hist", 10);
+
+  // 2) Also make sure Today's leaderboard stays at top-10 for this venue
+  await enforceTopNStatus("today", 10);
 }
+
+
 
 
 function normalizeRows(rows) {
@@ -566,16 +540,13 @@ async function confirmAddFromModal() {
 
       if (insErr) { throw insErr; }
 
-      // update local state + render
-      const target = _addTarget === "today" ? todayData : histData;
-      target.push(row);
-      keepTopNByTimeAsc(target, 10);
-      renderLeaderboard(target, _addTarget === "today" ? "#rank-table-today" : "#rank-table-hist");
-
+      // Ask the server to enforce "top 10" for this board+venue.
+      // This will trim overflow (status=2 or demote 'both') and then reload & re-render.
       await enforceTopNStatus(_addTarget, 10);
 
       // close the modal / cleanup
-      closeAddModal(); // this exists in your code
+      closeAddModal();
+
     } catch (err) {
       console.warn("Add failed:", err);
       alert("Save failed. Check your connection and try again.");
@@ -584,53 +555,6 @@ async function confirmAddFromModal() {
 }
 
 
-
-// function confirmAddFromModal() {
-//   const name = (document.getElementById("add-name").value || "").trim();
-
-//   // Raw string from the read-only time input (filled via keypad)
-//   const scoreStr = (document.getElementById("add-score").value || "").trim();
-
-//   // --- validations ---
-//   if (!name) {
-//     alert("Please enter a name.");
-//     return;
-//   }
-//   if (scoreStr === "") {
-//     alert("Please enter a time.");
-//     return;
-//   }
-//   // Must be a finite number > 0
-//   const scoreNum = Number(scoreStr);
-//   if (!Number.isFinite(scoreNum)) {
-//     alert("Please enter a valid time (e.g., 5.35).");
-//     return;
-//   }
-//   if (scoreNum <= 0) {
-//     alert("Time must be greater than 0.");
-//     return;
-//   }
-
-//   // Normalize to 2 decimals after validation
-//   const score = Math.round(scoreNum * 100) / 100;
-
-//   if (_addTarget === "today") {
-//     todayData.push({ id: nextGlobalId(), name, score });
-//     keepTopNByTimeAsc(todayData, 10);
-//     save(STORAGE_KEYS.today, todayData);
-//     renderLeaderboard(todayData, "#rank-table-today");
-//   } else if (_addTarget === "hist") {
-//     histData.push({ id: nextGlobalId(), name, score });
-//     keepTopNByTimeAsc(histData, 10);
-//     save(STORAGE_KEYS.hist, histData);
-//     renderLeaderboard(histData, "#rank-table-hist");
-//   }
-
-//   closeAddModal();
-// }
-
-
-// Add a "Delete" column with × buttons (only in edit mode)
 // Add a "Delete" column with × buttons (only in edit mode)
 function enableDeleteUI(tableSelector) {
   const table = document.querySelector(tableSelector);
@@ -1005,6 +929,7 @@ function ensureAllHaveIds() {
       if (!Number.isInteger(r.id)) { r.id = nextId++; changed = true; }
     }
   }
+  console.log(changed)
   return changed; // let the caller decide whether to saveBoard(...)
 }
 
@@ -1407,49 +1332,202 @@ function removeZoomGuards() {
 }
 
 /**
- * Keep only the fastest N rows as status=1, set the rest in this board+venue to status=2.
- * Also updates the local array and re-renders.
+ * Keep only the fastest N rows visible on a given board+venue.
+ *
+ * TODAY MODE:
+ *   - board === "today" → consider rows with board IN ("today","both")
+ *   - After sort:
+ *       · top N: unchanged (stay as they are, status=1)
+ *       · overflow:
+ *            - board="today" → status = 2 (archive)
+ *            - board="both"  → board="hist" (no longer on Today)
+ *
+ * HISTORICAL MODE (used on merge):
+ *   - board === "hist"
+ *   - Consider ALL active rows for this venue with board IN ("today","hist","both")
+ *   - Conceptually: existing hist/both + all today rows → sort → top N.
+ *
+ *   After sort:
+ *     For top N:
+ *       - board="today" → board="both", status=1
+ *       - board="both"  → keep "both", status=1
+ *       - board="hist"  → keep "hist", status=1
+ *
+ *     For the rest:
+ *       - board="hist"  → status=2
+ *       - board="both"  → board="today", status=1
+ *       - board="today" → do nothing in Supabase
+ *
+ * After DB updates we call refreshFromServer() so UI shows fresh top 10.
  */
 async function enforceTopNStatus(board, n = 10) {
-  if (currentVenue === "all") return; // no writes in ALL
+  if (currentVenue === "all") return; // never write in ALL view
 
-  const keyBoard = boardKey(board, currentVenue);
+  // ---------- TODAY MODE ----------
+  if (board === "today") {
+    const { data, error } = await supabase
+      .from("leaderboard")
+      .select("id, board, score")
+      .in("board", ["today", "both"])
+      .eq("venue", currentVenue)
+      .eq("status", 1)
+      .order("score", { ascending: true })
+      .limit(500);
 
-  // 1) Pull currently-active rows from server (ordered fastest first)
-  const { data, error } = await supabase
-    .from('leaderboard')
-    .select('id, name, score, status, venue, board')
-    .eq('board', keyBoard)
-    .eq('venue', currentVenue)
-    .eq('status', 1)
-    .order('score', { ascending: true })
-    .limit(500);
-  if (error) { console.warn('[enforceTopN] load error', error); return; }
+    if (error) {
+      console.warn("[enforceTopN today] load error", error);
+      return;
+    }
 
-  // 2) Compute keep / archive sets
-  const active = (data || []);
-  const keep = active.slice(0, n);
-  const archive = active.slice(n);
-  const keepIds = new Set(keep.map(r => r.id));
-  const archiveIds = archive.map(r => r.id).filter(Number.isInteger);
+    const active = data || [];
+    const keep = active.slice(0, n);
+    const overflow = active.slice(n);
 
-  // 3) Server: set status=2 for overflow
-  if (archiveIds.length) {
-    const { error: updErr } = await supabase
-      .from('leaderboard')
-      .update({ status: 2 })
-      .in('id', archiveIds);
-    if (updErr) console.warn('[enforceTopN] archive error', updErr);
+    const demoteIds = [];  // overflow "both" → hist only
+    const archiveIds = []; // overflow "today" → archived
+
+    for (const r of overflow) {
+      if (r.board === "both") {
+        demoteIds.push(r.id);
+      } else if (r.board === "today") {
+        archiveIds.push(r.id);
+      }
+    }
+
+    // Overflow "both" rows: keep only on Historical
+    if (demoteIds.length) {
+      const { error: demErr } = await supabase
+        .from("leaderboard")
+        .update({ board: "hist" })
+        .in("id", demoteIds)
+        .eq("venue", currentVenue);
+      if (demErr) console.warn("[enforceTopN today] demote error", demErr);
+    }
+
+    // Overflow "today" rows: archive
+    if (archiveIds.length) {
+      const { error: archErr } = await supabase
+        .from("leaderboard")
+        .update({ status: 2 })
+        .in("id", archiveIds)
+        .eq("venue", currentVenue);
+      if (archErr) console.warn("[enforceTopN today] archive error", archErr);
+    }
+
+    await refreshFromServer();
+    return;
   }
 
-  // 4) Local arrays: keep only top N for the correct board
-  const target = board === 'today' ? todayData : histData;
-  target.splice(0, target.length, ...target.filter(r => keepIds.has(r.id)));
+  // ---------- HISTORICAL MODE (merge semantics) ----------
+  if (board === "hist") {
+    // Consider ALL active rows on this venue:
+    //   - board='hist' (already historical only)
+    //   - board='both' (already appear in both)
+    //   - board='today' (candidates to be added via merge)
+    const { data, error } = await supabase
+      .from("leaderboard")
+      .select("id, board, score")
+      .in("board", ["today", "hist", "both"])
+      .eq("venue", currentVenue)
+      .eq("status", 1)
+      .order("score", { ascending: true })
+      .limit(500);
 
-  // 5) Render
-  renderLeaderboard(histData, "#rank-table-hist");
-  renderLeaderboard(todayData, "#rank-table-today");
+    if (error) {
+      console.warn("[enforceTopN hist] load error", error);
+      return;
+    }
+
+    const rows = data || [];
+    if (!rows.length) {
+      await refreshFromServer();
+      return;
+    }
+
+    const top = rows.slice(0, n);
+    const overflow = rows.slice(n);
+
+    const topTodayIds = [];
+    const topBothIds  = [];
+    const topHistIds  = [];
+
+    const overflowTodayIds = [];
+    const overflowBothIds  = [];
+    const overflowHistIds  = [];
+
+    for (const r of top) {
+      if (r.board === "today") topTodayIds.push(r.id);
+      else if (r.board === "both") topBothIds.push(r.id);
+      else if (r.board === "hist") topHistIds.push(r.id);
+    }
+
+    for (const r of overflow) {
+      if (r.board === "today") overflowTodayIds.push(r.id);
+      else if (r.board === "both") overflowBothIds.push(r.id);
+      else if (r.board === "hist") overflowHistIds.push(r.id);
+    }
+
+    // --- Apply your exact rules ---
+
+    // 1) Top 10: ensure they are visible on Historical correctly
+    //    - topToday  → board='both', status=1
+    if (topTodayIds.length) {
+      const { error: e1 } = await supabase
+        .from("leaderboard")
+        .update({ board: "both", status: 1 })
+        .in("id", topTodayIds)
+        .eq("venue", currentVenue);
+      if (e1) console.warn("[enforceTopN hist] top today->both error", e1);
+    }
+
+    //    - topBoth → keep 'both', ensure status=1 (defensive)
+    if (topBothIds.length) {
+      const { error: e2 } = await supabase
+        .from("leaderboard")
+        .update({ status: 1 })
+        .in("id", topBothIds)
+        .eq("venue", currentVenue);
+      if (e2) console.warn("[enforceTopN hist] top both status error", e2);
+    }
+
+    //    - topHist → keep 'hist', ensure status=1 (defensive)
+    if (topHistIds.length) {
+      const { error: e3 } = await supabase
+        .from("leaderboard")
+        .update({ status: 1 })
+        .in("id", topHistIds)
+        .eq("venue", currentVenue);
+      if (e3) console.warn("[enforceTopN hist] top hist status error", e3);
+    }
+
+    // 2) Overflow: apply “rest of the data” rules
+    //    - overflowHist → status=2
+    if (overflowHistIds.length) {
+      const { error: e4 } = await supabase
+        .from("leaderboard")
+        .update({ status: 2 })
+        .in("id", overflowHistIds)
+        .eq("venue", currentVenue);
+      if (e4) console.warn("[enforceTopN hist] overflow hist archive error", e4);
+    }
+
+    //    - overflowBoth → board='today', status=1
+    if (overflowBothIds.length) {
+      const { error: e5 } = await supabase
+        .from("leaderboard")
+        .update({ board: "today", status: 1 })
+        .in("id", overflowBothIds)
+        .eq("venue", currentVenue);
+      if (e5) console.warn("[enforceTopN hist] overflow both->today error", e5);
+    }
+
+    //    - overflowToday → do nothing (they stay on Today only)
+
+    await refreshFromServer();
+  }
 }
+
+
 
 function mergeEditsIntoData(which, editedRows) {
   const target = which === "hist" ? histData : todayData;
