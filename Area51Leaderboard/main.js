@@ -285,8 +285,10 @@ async function toggleEditable(tableSelector, btnEl, which) {
     btnEl.textContent = "Edit";
     btnEl.classList.remove("is-editing");
     card.classList.remove("editing");
+
+    // turn off delete UI for this table
     document.querySelector(tableSelector).dataset.wantDeleteCol = "0";
-    disableDeleteUI(tableSelector);  
+    disableDeleteUI(tableSelector);
 
     // Grab latest table → array
     const edited = tableToArray(tableSelector);
@@ -294,19 +296,40 @@ async function toggleEditable(tableSelector, btnEl, which) {
 
     // Only save if changed (still use normalized compare)
     if (!isSameData(before, edited)) {
-      const merged = mergeEditsIntoData(which, edited);
+      try {
+        if (which === "hist") {
+          // 🔧 NEW: Historical has special logic based on board value
+          const { changedBoth } = await applyHistoricalEdits(edited);
 
-    if (which === "hist") {
-      histData.splice(0, histData.length, ...merged);
-      await saveBoard("hist", histData);
-      renderLeaderboard(histData, "#rank-table-hist");
-    } else {
-      todayData.splice(0, todayData.length, ...merged);
-      await saveBoard("today", todayData);
-      renderLeaderboard(todayData, "#rank-table-today");
+          if (changedBoth) {
+            // Some board='both' rows changed → refresh both Today & Historical
+            await refreshFromServer();
+          } else {
+            // Only Historical-only rows (or new hist rows) changed
+            const histRows = await loadBoard("hist");
+            hydrate("hist", histRows);
+            renderLeaderboard(histData, "#rank-table-hist");
+          }
+        } else {
+          // Today behaviour stays as before (including delete semantics)
+          const merged = mergeEditsIntoData(which, edited);
+
+          if (which === "hist") {
+            // (kept for completeness; not used now)
+            histData.splice(0, histData.length, ...merged);
+            await saveBoard("hist", histData);
+            renderLeaderboard(histData, "#rank-table-hist");
+          } else {
+            todayData.splice(0, todayData.length, ...merged);
+            await saveBoard("today", todayData);
+            renderLeaderboard(todayData, "#rank-table-today");
+          }
+        }
+      } catch (err) {
+        console.warn("[edit save] error", err);
+        alert("Save failed. Check your connection and try again.");
+      }
     }
-  }
-
 
     showEmptyStateIfNeeded(document.getElementById("rank-table-hist"));
     showEmptyStateIfNeeded(document.getElementById("rank-table-today"));
@@ -329,12 +352,14 @@ async function toggleEditable(tableSelector, btnEl, which) {
   } else {
     // === Turning ON edit ===
     tbody.setAttribute("contenteditable", "true");
+
     // Keep the empty-state placeholder non-editable even in edit mode
     tbody.querySelectorAll("tr.table-empty, tr.table-empty > td").forEach(el => {
-    el.setAttribute("contenteditable", "false");
-    el.style.userSelect = "none";
+      el.setAttribute("contenteditable", "false");
+      el.style.userSelect = "none";
     });
 
+    // Rank column not editable
     [...tbody.rows].forEach(tr => tr.cells[0]?.setAttribute("contenteditable", "false"));
 
     // 🆕 Open numpad when the 3rd cell (Time) is focused/clicked
@@ -343,7 +368,6 @@ async function toggleEditable(tableSelector, btnEl, which) {
     tbody._timeHandler = (e) => {
       const td = e.target.closest?.("td");
       if (!td || !isTimeCell(td)) return;
-      // prevent typing chaos; rely on keypad
       e.preventDefault();
       openNumPadForCell(td);
     };
@@ -354,8 +378,16 @@ async function toggleEditable(tableSelector, btnEl, which) {
     btnEl.textContent = "Done (Save)";
     btnEl.classList.add("is-editing");
     card.classList.add("editing");
-    document.querySelector(tableSelector).dataset.wantDeleteCol = "1";
-    enableDeleteUI(tableSelector);
+
+    // ❌ No delete column for Historical edit
+    if (which === "hist") {
+      document.querySelector(tableSelector).dataset.wantDeleteCol = "0";
+      disableDeleteUI(tableSelector);
+    } else {
+      // Today still gets the delete column
+      document.querySelector(tableSelector).dataset.wantDeleteCol = "1";
+      enableDeleteUI(tableSelector);
+    }
 
     // Add a small tip below the buttons (once)
     if (!card.querySelector(".edit-tip")) {
@@ -382,6 +414,7 @@ async function toggleEditable(tableSelector, btnEl, which) {
     tbody.addEventListener("keydown", tbody._finishOnEnter);
   }
 }
+
 
 
 async function resetHistorical() {
@@ -1168,6 +1201,88 @@ function renderHeaders(tableSelector) {
   theadRow.innerHTML = cols.map((t) => `<th>${t}</th>`).join("");
 }
 
+/**
+ * Apply edits made in the Historical leaderboard to Supabase.
+ *
+ * Rules:
+ * - If an existing row (matched by id) has board='both' and its name/time changed:
+ *      → update that row (board stays 'both', status stays 1)
+ *      → we'll later re-render BOTH Today & Historical.
+ * - If an existing row has board other than 'both' (e.g. 'hist') and its name/time changed:
+ *      → update that row (board unchanged, status stays 1)
+ *      → we'll later re-render Historical only.
+ * - If a row is NEW (no known id in histData):
+ *      → create it as a Historical-only row: board='hist', status=1.
+ * - If a row disappears from the table, we DO NOT delete/archive anything in Supabase.
+ *
+ * Returns: { changedBoth: boolean } indicating if any 'both' row was edited.
+ */
+async function applyHistoricalEdits(editedRows) {
+  if (currentVenue === "all") return { changedBoth: false };
+
+  // Map current historical data (for this venue) by id so we can see board/status
+  const byId = new Map(
+    histData
+      .filter(r => Number.isInteger(r.id))
+      .map(r => [Number(r.id), r])
+  );
+
+  const payloads = [];
+  let changedBoth = false;
+
+  for (const r of editedRows) {
+    const cleanName  = (r.name || "").trim();
+    const cleanScore = Math.round((Number(r.score) || 0) * 100) / 100;
+    if (!cleanName) continue;
+
+    const id = Number.isInteger(r.id) ? r.id : undefined;
+
+    // NEW ROW typed directly in Historical
+    if (id == null || !byId.has(id)) {
+      const newId = id ?? nextGlobalId();
+      payloads.push(
+        toDBPayload("hist", currentVenue, { id: newId, name: cleanName, score: cleanScore }, 1)
+      );
+      continue;
+    }
+
+    // EXISTING ROW
+    const orig = byId.get(id);
+    const origName  = (orig.name || "").trim();
+    const origScore = Math.round((Number(orig.score) || 0) * 100) / 100;
+
+    // Skip if nothing actually changed
+    if (origName === cleanName && origScore === cleanScore) continue;
+
+    const board  = orig.board || "hist";
+    const status = orig.status ?? 1;
+
+    payloads.push({
+      id,
+      board,
+      venue: currentVenue,
+      name: cleanName,
+      score: cleanScore,
+      status
+    });
+
+    if (board === "both") changedBoth = true;
+  }
+
+  if (!payloads.length) return { changedBoth: false };
+
+  const { error } = await supabase
+    .from("leaderboard")
+    .upsert(payloads, { onConflict: "id" });
+
+  if (error) {
+    console.warn("[hist edit] upsert error", error);
+    throw error;
+  }
+
+  return { changedBoth };
+}
+
 
 // Button clicks
 document.getElementById("numpad")?.addEventListener("click", (e) => {
@@ -1254,6 +1369,9 @@ document.querySelector("#rank-table-today tbody")?.addEventListener("click", (e)
 
 // Delete implementation
 async function handleRowDelete(e, which, tableSelector) {
+  // 🚫 Historical rows cannot be deleted via the edit UI
+  if (which === "hist") return;
+
   const tr = e.target.closest("tr");
   if (!tr) return;
 
@@ -1277,6 +1395,7 @@ async function handleRowDelete(e, which, tableSelector) {
     tableSelector
   });
 }
+
 
 
 // --- Temporary zoom guard (iPad/iOS) just during numeric input ---

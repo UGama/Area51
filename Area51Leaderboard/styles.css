@@ -351,7 +351,7 @@ td.has-medal[data-medal="bronze"]::after { content: "🥉"; }
 /* Rules under the tables: small, black text */
 .rules {
   margin-top: 16px;
-  margin-bottom: 50px;
+  margin-bottom: 100px;
   color: #000;
   font-size: 16px;          /* make it small; change to 13px if you want a bit larger */
   line-height: 1.35;
@@ -518,4 +518,10 @@ td.has-medal[data-medal="bronze"]::after { content: "🥉"; }
 .venue-pill:hover{ background:#efe7f8; }
 .venue-pill.is-active{
   background: var(--brand); color:#fff; border-color: var(--brand);
+}
+.staff-tip {
+  margin: 0 0 14px;
+  font-size: 14px;
+  font-style: italic;
+  color: #553c86;  /* or #555 if you want more neutral */
 }
