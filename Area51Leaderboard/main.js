@@ -85,14 +85,14 @@ async function loadBoard(board) {
     }
     return rowsFromDB(data || []);
   } else {
-    // ALL view = merge all venues, same rule for board
+    // ALL view = merge all venues
     const boardsToInclude = board === "hist"
       ? ["hist", "both"]
       : ["today", "both"];
 
     const { data, error } = await supabase
       .from("leaderboard")
-      .select("id, board, venue, name, score, status")
+      .select("id, board, venue, name, score, status, updated_at")
       .in("board", boardsToInclude)
       .in("venue", VENUES)
       .eq("status", ACTIVE)
@@ -104,9 +104,18 @@ async function loadBoard(board) {
       return [];
     }
 
-    const merged = rowsFromDB(data || []).sort(
+    let rows = data || [];
+
+    // For ALL → Today's leaderboard: only keep rows updated "today" in Brisbane
+    if (board !== "hist") {
+      const todayKey = todayBrisbaneKey();
+      rows = rows.filter(r => brisbaneDayKeyFromIso(r.updated_at) === todayKey);
+    }
+
+    const merged = rowsFromDB(rows).sort(
       (a, b) => Number(a.score || 0) - Number(b.score || 0)
     );
+
     return merged.slice(0, 10);
   }
 }
@@ -1646,8 +1655,6 @@ async function enforceTopNStatus(board, n = 10) {
   }
 }
 
-
-
 function mergeEditsIntoData(which, editedRows) {
   const target = which === "hist" ? histData : todayData;
   const existingById = new Map(
@@ -1695,6 +1702,38 @@ function mergeEditsIntoData(which, editedRows) {
   return result;
 }
 
+function brisbaneDayKeyFromIso(isoString) {
+  if (!isoString) return null;
+  try {
+    const d = new Date(isoString);
+    if (Number.isNaN(d.getTime())) return null;
+
+    const fmt = new Intl.DateTimeFormat("en-AU", {
+      timeZone: "Australia/Brisbane",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    });
+
+    const parts = fmt.formatToParts(d);
+    let y, m, day;
+    for (const p of parts) {
+      if (p.type === "year")  y = p.value;
+      if (p.type === "month") m = p.value;
+      if (p.type === "day")   day = p.value;
+    }
+    if (!y || !m || !day) return null;
+    return `${y}-${m}-${day}`; // e.g. "2025-11-21"
+  } catch (err) {
+    console.warn("[date] failed to parse timestamp", isoString, err);
+    return null;
+  }
+}
+
+/** Today’s date in Brisbane, as YYYY-MM-DD */
+function todayBrisbaneKey() {
+  return brisbaneDayKeyFromIso(new Date().toISOString());
+}
 
 // Modal controls
 document.getElementById("add-cancel")?.addEventListener("click", closeAddModal);
