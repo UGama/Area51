@@ -965,15 +965,26 @@ function nextGlobalId() {
 
 function ensureAllHaveIds() {
   let changed = false;
-  let nextId = nextGlobalId();
+  // start from the highest id we know about, including existing data
+  const maxExisting = Math.max(
+    GLOBAL_NEXT_ID,
+    ...histData.map(r => r.id ?? -1),
+    ...todayData.map(r => r.id ?? -1)
+  );
+  GLOBAL_NEXT_ID = Number.isFinite(maxExisting) ? maxExisting : 0;
+
   for (const arr of [histData, todayData]) {
     for (const r of arr) {
-      if (!Number.isInteger(r.id)) { r.id = nextId++; changed = true; }
+      if (!Number.isInteger(r.id)) {
+        GLOBAL_NEXT_ID += 1;
+        r.id = GLOBAL_NEXT_ID;
+        changed = true;
+      }
     }
   }
-  console.log(changed)
-  return changed; // let the caller decide whether to saveBoard(...)
+  return changed;
 }
+
 
 
 let _numpadTarget = null;

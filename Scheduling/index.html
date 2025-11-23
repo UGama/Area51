@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="apple-touch-icon" href="pic/icon-192.png">
+  <meta name="theme-color" content="#4e2a6c">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js" crossorigin="anonymous"></script>
+</head>  
+<body>
+  <header class="topbar">
+    <img class="logo" src="pic/logo.png" alt="Area51 logo">
+    <span class="brand">Area51 Scheduling</span>
+  </header>
+  <main class="page">
+    <section class="panel">
+      <header class="panel__head">
+        <h1>Employee List</h1>
+      </header>
+      <div class="list-window" id="name-window">
+        <ul id="name-list" class="name-list"></ul>
+      </div>
+      <div class="hint" id="load-hint">Loading employees…</div>
+    </section>
+    <section class="panel panel--details">
+      <header class="panel__head">
+        <h1>Employee Details</h1>
+      </header>
+      <div class="search-wrap">
+        <form class="search-bar" id="search-form">
+          <input id="search-input" type="text" placeholder="Search by name" autocomplete="off">
+          <button type="submit">Search</button>
+        </form>
+        <ul class="suggestions" id="suggestions" role="listbox"></ul>
+      </div>
+      <div class="detail-card">
+        <div class="detail-row">
+          <span class="detail-label">Name</span>
+          <span class="detail-value" id="detail-name">—</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Venue</span>
+          <span class="detail-value" id="detail-venue">—</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Position</span>
+          <span class="detail-value" id="detail-position">—</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Type</span>
+          <span class="detail-value" id="detail-type">—</span>
+        </div>
+      </div>
+      <div class="detail-actions">
+        <button type="button" class="ghost danger">Delete</button>
+        <button type="button" class="ghost">Reset</button>
+      </div>
+    </section>
+  </main>
+  <div id="copyright" class="copyright">
+    &copy; <span id="copyright-year"></span> Mian
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>
