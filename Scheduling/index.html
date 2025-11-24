@@ -14,7 +14,7 @@
     <span class="brand">Area51 Scheduling</span>
   </header>
   <main class="page">
-    <section class="panel">
+    <section class="panel panel--list">
       <header class="panel__head">
         <h1>Employee List</h1>
       </header>
@@ -57,7 +57,48 @@
         <button type="button" class="ghost">Reset</button>
       </div>
     </section>
+    <section class="panel panel--rules">
+      <header class="panel__head">
+        <h1>Add Rules</h1>
+      </header>
+      <form class="rule-form" id="rule-form">
+        <div class="rule-inputs">
+          <div class="rule-name-wrap">
+            <input id="rule-name-input" type="text" placeholder="Search name" autocomplete="off">
+            <ul class="suggestions suggestions--rule" id="rule-name-suggestions" role="listbox"></ul>
+          </div>
+          <select id="rule-require" required>
+            <option value="" selected disabled hidden>Select...</option>
+            <option value="can't">can't</option>
+            <option value="must">must</option>
+          </select>
+          <span class="rule-text">be scheduled from</span>
+          <select id="rule-start" required></select>
+          <span class="rule-text">to</span>
+          <select id="rule-end" required></select>
+          <span class="rule-text">on</span>
+          <select id="rule-day" required></select>
+        </div>
+        <div class="rule-actions">
+          <button type="submit" class="ghost">Add</button>
+        </div>
+      </form>
+      <div class="rules-window">
+        <div id="rules-list" class="rules-textarea"></div>
+      </div>
+    </section>
   </main>
+  <div class="roster-generate">
+    <button type="button" id="roster-generate-btn">Generate</button>
+  </div>
+  <section class="roster-section">
+    <header class="roster-head">
+      <h2>Weekly Roster</h2>
+    </header>
+    <div class="roster-wrapper">
+      <div class="roster-grid" id="roster-grid"></div>
+    </div>
+  </section>
   <div id="copyright" class="copyright">
     &copy; <span id="copyright-year"></span> Mian
   </div>
